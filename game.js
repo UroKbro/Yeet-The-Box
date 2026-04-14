@@ -58,10 +58,14 @@ window.onload = function () {
         height: 2000
     };
 
-    const platforms = createPlatforms(world).map((platform, index) => ({
+    const level = generateLevel(Date.now(), 2, world.width, world.height);
+    player.x = level.startPos.x;
+    player.y = level.startPos.y;
+
+    const platforms = level.platforms.map((platform, index) => ({
         ...platform,
         id: index,
-        crumbleDelay: platform.type === "crumble" ? 500 : 0,
+        crumbleDelay: platform.crumbleDuration || (platform.type === "crumble" ? 500 : 0),
         crumbleResetDelay: platform.type === "crumble" ? 2400 : 0,
         crumbleState: platform.type === "crumble" ? "idle" : "stable",
         crumbleTriggeredAt: 0,
@@ -361,29 +365,62 @@ window.onload = function () {
             const drawY = p.y - camera.y;
 
             if (p.type === "crumble" && p.crumbleState === "warning") {
-                drawX += Math.sin(Date.now() / 30 + p.id) * 2;
+                const flash = Math.floor(Date.now() / 90) % 2 === 0;
+                ctx.fillStyle = flash ? "#FF4D4D" : "#FFE066";
+                const segments = 4;
+                const segH = p.h / segments;
+                // Intensity increases as timer runs out
+                const elapsed = Date.now() - p.crumbleTriggeredAt;
+                const intensity = 1 + (elapsed / p.crumbleDelay) * 3;
+                
+                for (let s = 0; s < segments; s++) {
+                    const offsetY = (Math.random() - 0.5) * intensity;
+                    const offsetX = (Math.random() - 0.5) * intensity;
+                    ctx.fillRect(drawX + offsetX, drawY + s * segH + offsetY, p.w, segH);
+                }
+                continue; // skip the solid fillRect below
             }
 
-            if (p.type === "ground") {
+            if (p.type === "ghost") {
+                ctx.fillStyle = "rgba(100, 100, 100, 0.25)";
+            } else if (p.type === "ground") {
                 ctx.fillStyle = "#245C24";
+            } else if (p.colorHint) {
+                ctx.fillStyle = p.colorHint;
             } else if (p.type === "risk") {
                 ctx.fillStyle = "#FF8C42";
             } else if (p.type === "crumble") {
-                const flash = Math.floor(Date.now() / 90) % 2 === 0;
-                ctx.fillStyle = p.crumbleState === "warning"
-                    ? (flash ? "#FF4D4D" : "#FFE066")
-                    : "#C7792B";
+                ctx.fillStyle = "#C7792B";
             } else if (p.type === "reward") {
                 ctx.fillStyle = "#FFD23F";
             } else if (p.type === "riskReset" || p.type === "shortcut") {
                 ctx.fillStyle = "#4CC9F0";
             } else if (p.type === "exit") {
                 ctx.fillStyle = "#9B5DE5";
+            } else if (p.type === "deadend") {
+                ctx.fillStyle = "#803e46ff";
+            } else if (p.type === "start") {
+                ctx.fillStyle = "#4287f5";
             } else {
                 ctx.fillStyle = "#1B7A1B";
             }
 
             ctx.fillRect(drawX, drawY, p.w, p.h);
+
+            // Scenery / Set Dressing
+            if (p.hasScenery) {
+               ctx.fillStyle = (p.sceneryType === "OLD_STATUE") ? "#A9A9A9" : "#D4AF37";
+               // Draw a rough shape for scenery (like a little ruin or vase)
+               ctx.beginPath();
+               ctx.moveTo(drawX + p.w / 2, drawY);
+               ctx.lineTo(drawX + p.w / 2 - 10, drawY - 25);
+               ctx.lineTo(drawX + p.w / 2 + 10, drawY - 25);
+               ctx.fill();
+               // Circle head
+               ctx.beginPath();
+               ctx.arc(drawX + p.w / 2, drawY - 30, 8, 0, Math.PI * 2);
+               ctx.fill();
+            }
 
             if (p.type === "reward") {
                 ctx.strokeStyle = "#FFF3B0";

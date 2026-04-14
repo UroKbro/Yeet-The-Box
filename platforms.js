@@ -1,181 +1,268 @@
-function createPlatforms(world) {
-  const W = world.width;
-  const H = world.height;
-  const GROUND_Y = H - 40;
+// Phase 1: Define Your Core Systems (Foundation)
+function createLevelGenerator() {
+  
+  // 1. Player Movement Spec (Non-Negotiable)
+  const PLAYER = {
+    jump_power: 15,
+    gravity: 0.475,
+    max_speed: 4.5,
+    dash_speed: 12,
+    dash_duration_frames: Math.floor(120 / 16.67),
+    player_w: 50,
+    player_h: 50,
+    // Jump limits (derived manually to guide chunks)
+    jump_x: 280,   // Max standard horizontal distance
+    jump_y: 230,   // Max vertical jump height
+    dash_x: 360    // Max horizontal distance with jump AND dash
+  };
 
-  const PLAYER_W = 50;
-  const JUMP_POWER = 15;
-  const GRAVITY = 0.475;
-  const MAX_SPEED = 4.5;
-  const DASH_SPEED = 12;
-  const DASH_DURATION_MS = 120;
-
-  const AIR_TIME = (2 * JUMP_POWER) / GRAVITY;
-  const JUMP_DISTANCE = MAX_SPEED * AIR_TIME;
-  const DASH_DISTANCE = DASH_SPEED * (DASH_DURATION_MS / 1000);
-
-  const STANDARD_GAP = Math.floor(JUMP_DISTANCE * 0.75);
-  const RISK_CHAIN_GAP = Math.floor((JUMP_DISTANCE + DASH_DISTANCE) * 0.9);
-  const MAX_RISK_VERTICAL_STEP = 130;
-
-  let seed = 1337;
+  // Seeded Random Helper
+  let _s = 100;
   function random() {
-    seed |= 0;
-    seed = (seed + 0x6D2B79F5) | 0;
-    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    _s |= 0; _s = (_s + 0x6D2B79F5) | 0;
+    let t = Math.imul(_s ^ (_s >>> 15), 1 | _s);
     t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   }
+  const ri = (a, b) => Math.floor(a + random() * (b - a + 0.999));
+  const chance = (p) => random() < p;
+  const choice = (arr) => arr[ri(0, arr.length - 1)];
 
-  const rr = (a, b) => a + random() * (b - a);
-  const ri = (a, b) => Math.floor(rr(a, b + 0.999));
-
-  const platforms = [];
-  const standardPath = [];
-  const riskPath = [];
-
-  function addPlatform(platform, path) {
-    platforms.push(platform);
-    if (path) path.push(platform);
-    return platform;
+  // 2. Platform Data Structure
+  let nextId = 0;
+  function Platform(x, y, w = 100, h = 20, type = 'standard', tag = '') {
+    return { x, y, w, h, type, tag, id: nextId++ };
   }
 
-  function makeStandardSegment(prev, index) {
-    const w = ri(180, 280);
-    const gap = ri(Math.floor(STANDARD_GAP * 0.82), Math.floor(STANDARD_GAP * 0.98));
-    const x = prev.x + prev.w + gap;
-    const yShift = ri(-45, 35);
-    const minY = GROUND_Y - 320;
-    const maxY = GROUND_Y - 120;
-    const y = Math.max(minY, Math.min(maxY, prev.y + yShift));
+  return function generateLevel(seed, difficulty, worldWidth, worldHeight) {
+    _s = seed; // Initalize deterministic RNG
+    nextId = 0;
+    const GROUND_Y = worldHeight - 40;
+    const GOAL_X = worldWidth - 400;
+
+    // Phase 7: Validation System (CRITICAL)
+    // Simulated physics loop traversing a jump arc between p1 and p2
+    function simJump(p1, p2, useDash) {
+      const hSpeedDir = p2.x > p1.x ? 1 : -1;
+      let hSpeed = hSpeedDir * PLAYER.max_speed;
+      let px = hSpeed >= 0 ? (p1.x + p1.w - PLAYER.player_w) : p1.x;
+      let py = p1.y - PLAYER.player_h;
+      let vy = -PLAYER.jump_power;
+      
+      let dashed = false;
+      let dashFramesLeft = 0;
+
+      for (let f = 0; f < 300; f++) {
+        if (useDash && !dashed && vy >= -1 && vy <= 2) {
+          dashed = true;
+          dashFramesLeft = PLAYER.dash_duration_frames;
+          let dy = 0;
+          if (p2.y + 50 < p1.y) dy = -0.4; // slight vertical aim if target is high
+          const len = Math.sqrt(1 + dy*dy);
+          hSpeed = (hSpeedDir / len) * PLAYER.dash_speed;
+          vy = (dy / len) * PLAYER.dash_speed;
+        }
+
+        if (dashFramesLeft > 0) {
+          dashFramesLeft--;
+          px += hSpeed;
+          py += vy;
+          if (dashFramesLeft === 0) {
+            hSpeed = hSpeedDir * PLAYER.max_speed;
+            vy = 0;
+          }
+        } else {
+          px += hSpeed;
+          vy = Math.min(vy + PLAYER.gravity, 10);
+          py += vy;
+        }
+
+        // Landing Detection on p2
+        if (px + PLAYER.player_w > p2.x && px < p2.x + p2.w && vy >= 0 && py + PLAYER.player_h >= p2.y && py + PLAYER.player_h <= p2.y + 36) {
+          return true;
+        }
+        if (py > Math.max(p1.y, p2.y) + 600) return false;
+      }
+      return false;
+    }
+
+    function is_reachable(p1, p2, reqDash) {
+      if (reqDash) return !simJump(p1, p2, false) && simJump(p1, p2, true);
+      return simJump(p1, p2, false) || simJump(p1, p2, true);
+    }
+
+    // Phase 2: Build a Chunk System
+    function build_chunk(type, current) {
+      let platforms = [];
+      let exit = current;
+      
+      // Easy Chunks
+      if (type === 'flat') {
+        const p1 = Platform(current.x + current.w + ri(60, 100), current.y, ri(150, 250), 20, 'standard');
+        platforms.push(p1);
+        exit = p1;
+      } else if (type === 'small_gap') {
+        const p1 = Platform(current.x + current.w + ri(120, 180), current.y + ri(-20, 20), ri(150, 200), 20, 'standard');
+        platforms.push(p1);
+        exit = p1;
+      } else if (type === 'stair_up') {
+        const p1 = Platform(current.x + current.w + 120, current.y - 70, 140, 20, 'standard');
+        const p2 = Platform(p1.x + p1.w + 120, p1.y - 70, 140, 20, 'standard');
+        platforms.push(p1, p2);
+        exit = p2;
+      } else if (type === 'stair_down') {
+        const p1 = Platform(current.x + current.w + 120, current.y + 70, 140, 20, 'standard');
+        const p2 = Platform(p1.x + p1.w + 120, p1.y + 70, 140, 20, 'standard');
+        platforms.push(p1, p2);
+        exit = p2;
+      }
+      // Hard Chunks
+      else if (type === 'dash_gap') {
+        // Gap of ~320 explicitly requires a dash
+        const p1 = Platform(current.x + current.w + ri(300, 340), current.y + ri(-30, 30), ri(60, 100), 15, 'risk');
+        platforms.push(p1);
+        exit = p1;
+      } else if (type === 'precision_jump') {
+        const p1 = Platform(current.x + current.w + 240, current.y - ri(30, 60), 50, 15, 'risk');
+        const p2 = Platform(p1.x + p1.w + 240, p1.y - ri(30, 60), 50, 15, 'risk');
+        platforms.push(p1, p2);
+        exit = p2;
+      } else if (type === 'vertical_climb') {
+        const p1 = Platform(current.x + current.w + 120, current.y - 120, 60, 15, 'risk');
+        const p2 = Platform(p1.x + p1.w + 120, p1.y - 120, 60, 15, 'risk');
+        platforms.push(p1, p2);
+        exit = p2;
+      } else if (type === 'risky_drop') {
+        const p1 = Platform(current.x + current.w + 200, current.y + 180, 70, 15, 'crumble');
+        platforms.push(p1);
+        exit = p1;
+      }
+
+      return { platforms, exit };
+    }
+
+    // Phase 8: Difficulty & Rhythm Control (Curves)
+    const easyCurve = ["flat", "small_gap", "flat", "stair_up", "flat", "stair_down"];
+    const hardCurve = ["dash_gap", "precision_jump", "rest", "vertical_climb", "risky_drop", "dash_gap"];
+
+    // Phase 3 & 4: Path Generators
+    function generate_path(start, curve, isHard) {
+      const path_platforms = [];
+      let current = start;
+      let curve_idx = 0;
+
+      while (current.x < GOAL_X - 500) {
+        let chunk_type = curve[curve_idx % curve.length];
+        if (chunk_type === "rest") chunk_type = "flat";
+        if (chance(0.2)) chunk_type = choice(curve.filter(c => c !== "rest")); // variance
+
+        const chunk = build_chunk(chunk_type, current);
+        let valid = true;
+
+        // Phase 9: Polish Layer - Visual Flow & Ceilings/Floors
+        chunk.platforms.forEach(p => {
+          if (isHard) {
+            p.type = chance(0.2) ? 'crumble' : (p.type === 'standard' ? 'risk' : p.type);
+            p.y = Math.max(100, Math.min(GROUND_Y - 250, p.y)); // Hard = Higher
+            p.colorHint = '#ff4444'; 
+          } else {
+            p.type = 'standard';
+            p.y = Math.max(GROUND_Y - 350, Math.min(GROUND_Y - 100, p.y)); // Easy = Lower
+            p.colorHint = '#1B7A1B';
+          }
+        });
+
+        // Reachability Validation
+        let testStart = current;
+        for (let p of chunk.platforms) {
+          if (!is_reachable(testStart, p, isHard && chunk_type === 'dash_gap')) {
+            valid = false;
+            break;
+          }
+          testStart = p;
+        }
+
+        if (valid) {
+          path_platforms.push(...chunk.platforms);
+          current = chunk.exit;
+        } else {
+          // Rescue: insert a guaranteed reachable platform
+          const fallback = Platform(current.x + current.w + 180, current.y, 160, 20, isHard ? 'risk' : 'standard');
+          if (isHard) { fallback.y -= 50; fallback.colorHint = '#ff4444'; }
+          path_platforms.push(fallback);
+          current = fallback;
+        }
+
+        curve_idx++;
+      }
+      return { path_platforms, exit: current };
+    }
+
+    // Phase 5: Shared Start + End
+    const start  = Platform(100, GROUND_Y - 150, 250, 25, 'start', 'shared');
+    const goal   = Platform(GOAL_X, GROUND_Y - 350, 300, 30, 'exit', 'shared');
+    const all_platforms = [start, goal];
+
+    // Build the easy and hard paths
+    const { path_platforms: easyPath, exit: easyLast } = generate_path(start, easyCurve, false);
+    const { path_platforms: hardPath, exit: hardLast } = generate_path(start, hardCurve, true);
+    
+    all_platforms.push(...easyPath);
+    all_platforms.push(...hardPath);
+
+    // Connect both trails to the goal safely
+    function connect(lastP, isHard) {
+      if (!is_reachable(lastP, goal, false)) {
+        const bridge = Platform(lastP.x + lastP.w + 150, (lastP.y + goal.y) / 2, 120, 20, isHard ? 'risk' : 'standard');
+        all_platforms.push(bridge);
+      }
+    }
+    connect(easyLast, false);
+    connect(hardLast, true);
+
+    // Phase 6: Fake Platforms
+    function generate_fake_platforms(main_paths) {
+      const fakes = [];
+      main_paths.forEach(p => {
+        if (chance(0.25)) {
+          const fake = Platform(
+            p.x + ri(-200, 200),
+            p.y + ri(-250, 250),
+            ri(60, 140), 15, 'deadend', 'fake'
+          );
+          if (is_reachable(p, fake, false) || is_reachable(p, fake, true)) {
+            // Apply Phase 9: Rewards/Set Dressing
+            fake.hasScenery = chance(0.5);
+            fake.sceneryType = chance(0.5) ? 'OLD_STATUE' : 'VASE';
+            fakes.push(fake);
+          }
+        }
+      });
+      return fakes;
+    }
+    
+    // Add fakes extending from both paths limits
+    const fake_plats = generate_fake_platforms([...easyPath, ...hardPath]);
+    all_platforms.push(...fake_plats);
+
+    // Context / Decor Additions (Ground, Ceiling, Parallax)
+    all_platforms.push(Platform(0, GROUND_Y, worldWidth, 50, 'ground')); // Floor
+    all_platforms.push(Platform(0, -100, worldWidth, 150, 'ground'));    // Ceiling
+    
+    for (let i = 0; i < 30; i++) {
+       const ghost = Platform(ri(0, worldWidth), ri(50, GROUND_Y - 100), ri(100, 400), ri(15, 45), 'ghost');
+       ghost.isBackground = true;
+       all_platforms.push(ghost);
+    }
 
     return {
-      x,
-      y,
-      w,
-      h: ri(20, 28),
-      type: "standard",
-      segmentIndex: index
+      platforms: all_platforms,
+      startPos: { x: start.x + start.w / 2 - 25, y: start.y - 50 },
+      goalPos:  { x: goal.x + goal.w / 2 - 25, y: goal.y - 50 },
+      seed,
+      difficulty
     };
-  }
-
-  function addRiskBranch(anchor, branchIndex) {
-    const branch = [];
-    const branchCount = ri(3, 4);
-    let prevX = anchor.x + anchor.w - 18;
-    let prevY = anchor.y;
-
-    for (let i = 0; i < branchCount; i++) {
-      const stepX = Math.floor(RISK_CHAIN_GAP * rr(0.82, 0.94));
-      const stepY = ri(70, MAX_RISK_VERTICAL_STEP);
-      const pip = {
-        x: prevX + stepX,
-        y: prevY - stepY,
-        w: ri(48, 64),
-        h: 14,
-        type: i === 1 ? "crumble" : "risk",
-        branchIndex,
-        branchStep: i
-      };
-
-      addPlatform(pip, riskPath);
-      branch.push(pip);
-      prevX = pip.x;
-      prevY = pip.y;
-    }
-
-    const reward = addPlatform(
-      {
-        x: prevX + ri(80, 120),
-        y: prevY - ri(20, 45),
-        w: 160,
-        h: 18,
-        type: "reward",
-        branchIndex
-      },
-      riskPath
-    );
-
-    return { branch, reward };
-  }
-
-  platforms.push({ x: 0, y: GROUND_Y, w: W, h: 40, type: "ground" });
-
-  const startPlatform = addPlatform(
-    {
-      x: 70,
-      y: GROUND_Y - 130,
-      w: 280,
-      h: 28,
-      type: "standard",
-      segmentIndex: 0,
-      isStart: true
-    },
-    standardPath
-  );
-
-  let current = startPlatform;
-  let segmentIndex = 1;
-  const branchPlan = [];
-
-  while (current.x + current.w < W - 700) {
-    const next = makeStandardSegment(current, segmentIndex);
-    addPlatform(next, standardPath);
-
-    if (segmentIndex % 4 === 0 && next.x < W - 1400) {
-      branchPlan.push({
-        anchor: current,
-        rejoin: next,
-        branchIndex: branchPlan.length
-      });
-    }
-
-    current = next;
-    segmentIndex++;
-  }
-
-  branchPlan.forEach(({ anchor, rejoin, branchIndex }) => {
-    const { reward } = addRiskBranch(anchor, branchIndex);
-
-    addPlatform(
-      {
-        x: reward.x + reward.w + ri(90, 120),
-        y: reward.y + ri(40, 70),
-        w: 190,
-        h: 20,
-        type: "riskReset",
-        branchIndex
-      },
-      riskPath
-    );
-
-    addPlatform(
-      {
-        x: rejoin.x - ri(70, 110),
-        y: rejoin.y - ri(12, 24),
-        w: 120,
-        h: 16,
-        type: "shortcut",
-        branchIndex
-      },
-      riskPath
-    );
-  });
-
-  const exitX = W - 340;
-  const exitY = Math.min(current.y, GROUND_Y - 140);
-
-  addPlatform(
-    {
-      x: exitX,
-      y: exitY,
-      w: 300,
-      h: 30,
-      type: "exit",
-      isExit: true
-    },
-    standardPath
-  );
-
-  return platforms;
+  };
 }
+
+const generateLevel = createLevelGenerator();
