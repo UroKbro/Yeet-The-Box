@@ -17,12 +17,15 @@ window.onload = function () {
         h: 50,
         vx: 0,
         vy: 0,
-        // movement tuning (tuned for snappy but smooth feel)
-        accel: 0.75,
-        friction: 0.9,
-        maxSpeed: 5,
-        maxFallSpeed: 16,
-        jumpPower: 14,
+        // movement tuning (tuned for snappy but controlled feel)
+        // accel: how quickly player accelerates toward target speed
+        accel: 1.6,
+        friction: 0.825,
+        maxSpeed: 4.5,
+        // brake: how quickly player decelerates when stopping (lower = less instant stop)
+        brake: 0.35,
+        maxFallSpeed: 10,
+        jumpPower: 15,
         onGround: false,
         lastJumpTime: 0,
         jumpCooldown: 450, // ms
@@ -34,7 +37,7 @@ window.onload = function () {
         jumpBufferTime: 75, // ms
         lastJumpPress: 0
     };
-    const gravity = 0.45;
+    const gravity = 0.475;
     const world = {
         width: 5000,
         height: 2000
@@ -68,7 +71,7 @@ window.onload = function () {
     });
 
 
-    function update() {
+    function update(dt) {
         const prevY = player.y;
 
         // Horizontal input: -1 (left), 0, 1 (right)
@@ -76,19 +79,34 @@ window.onload = function () {
         if (keys["ArrowLeft"]) inputX -= 1;
         if (keys["ArrowRight"]) inputX += 1;
 
-        // Apply acceleration (weaker in air)
+        // ---- Horizontal movement: approach-based, frame-rate aware ----
+        // Use dt (seconds) to scale behavior; keep feel consistent across frame rates
+        const scale = Math.min(1, (dt || 0.016) * 60);
         const effectiveAccel = player.accel * (player.onGround ? 1 : player.airControl);
-        if (inputX !== 0) {
-            player.vx += inputX * effectiveAccel;
-        } else {
-            // Apply ground friction when no input, gentle air drag when airborne
-            if (player.onGround) {
-                player.vx *= player.friction;
-                if (Math.abs(player.vx) < 0.1) player.vx = 0;
-            } else {
-                player.vx *= 0.997;
-            }
+
+        // Target horizontal velocity based on input
+        const targetVx = inputX * player.maxSpeed;
+
+        // If changing direction, apply an immediate turn-brake to remove momentum
+        if (inputX !== 0 && player.vx !== 0 && Math.sign(inputX) !== Math.sign(player.vx)) {
+            const turnBrake = (player.brake || 0.35) * 2.0 * scale;
+            if (Math.abs(player.vx) <= turnBrake) player.vx = 0;
+            else player.vx -= Math.sign(player.vx) * turnBrake;
         }
+
+        // Move vx toward targetVx using acceleration or braking depending on direction
+        if (player.vx < targetVx) {
+            // accelerate right
+            player.vx = Math.min(player.vx + effectiveAccel * scale, targetVx);
+        } else if (player.vx > targetVx) {
+            // decelerate/accelerate left
+            const decel = (inputX === 0) ? (player.brake || 0.35) : effectiveAccel;
+            if (player.vx - decel * scale < targetVx) player.vx = targetVx;
+            else player.vx -= decel * scale;
+        }
+
+        // Gentle air damping when airborne and no input
+        if (!player.onGround && inputX === 0) player.vx *= 0.992;
 
         // Clamp horizontal speed
         player.vx = Math.max(-player.maxSpeed, Math.min(player.maxSpeed, player.vx));
@@ -198,11 +216,16 @@ window.onload = function () {
         }
     }
 
-    function loop() {
-        update();
+    // frame-timed loop so movement is consistent across different refresh rates
+    let lastTime = 0;
+    function loop(timestamp) {
+        if (!lastTime) lastTime = timestamp;
+        const dt = Math.min(0.05, (timestamp - lastTime) / 1000); // clamp to avoid large steps
+        lastTime = timestamp;
+        update(dt);
         draw();
         requestAnimationFrame(loop);
     }
 
-    loop();
+    requestAnimationFrame(loop);
 };
