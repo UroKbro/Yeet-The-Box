@@ -1,4 +1,4 @@
-# Procedural Platformer
+# Yeet the Box: Unnecessarily Procedural Parkour Boogaloo
 
 A lightweight, physics-driven platformer featuring smart procedural level generation and smooth player movement mechanics. Built entirely with Vanilla JavaScript and HTML5 Canvas.
 
