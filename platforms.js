@@ -131,13 +131,46 @@ function createPlatforms(world) {
     });
   }
 
-  // ── Step 5: Dead-Ends ─────────────────────────────────────────────
+  // ── Step 5: Dead-Ends and Useless Fluff ─────────────────────────────
   // Sparse but intentional dead ends branching off
   for (let i = 4; i < pathA.length - 4; i += 6) {
     const anchor = pathA[i];
     const deX = anchor.x + rr(100, 200);
     const deY = anchor.y - rr(150, 250);
     platforms.push({ x: deX, y: deY, w: 80, h: 15, type: 'deadend' });
+  }
+
+  // Generate a bunch of varying useless platforms that are accessible
+  const numFluffClusters = 12;
+  for (let i = 0; i < numFluffClusters; i++) {
+    // Pick a random anchor from pathA or pathB
+    const sourcePath = random() > 0.5 ? pathA : pathB;
+    if (sourcePath.length === 0) continue;
+    const anchorIdx = ri(0, sourcePath.length - 1);
+    const anchor = sourcePath[anchorIdx];
+
+    let cx = anchor.x;
+    let cy = anchor.y;
+    let cw = anchor.w;
+
+    const chainLen = ri(2, 6);
+    for (let c = 0; c < chainLen; c++) {
+      const pw = ri(30, 200); // highly varying width
+      const ph = ri(10, 40);  // highly varying height
+      const gapX = rr(0.2, 0.7) * MAX_JUMP_X * (random() > 0.5 ? 1 : -1); // can go backward or forward
+      const dropY = rr(-150, 150); // up or down
+
+      const nx = Math.floor(cx + (gapX > 0 ? cw : -pw) + gapX);
+      const ny = Math.max(100, Math.min(GROUND_Y - 50, Math.floor(cy + dropY)));
+
+      // Ensure it is accessible from the previous platform in the chain
+      if (canReach(cx, cy, cw, nx, ny, pw) || canReach(nx, ny, pw, cx, cy, cw)) {
+        platforms.push({ x: nx, y: ny, w: pw, h: ph, type: 'deadend' });
+        cx = nx;
+        cy = ny;
+        cw = pw;
+      }
+    }
   }
 
   // ── Step 6: Exit platform ─────────────────────────────────────────
