@@ -1,53 +1,29 @@
-# Yeet the Box: Unnecessarily Procedural Parkour Boogaloo
+# Yeet the Box
 
-A lightweight, high-octane physics-driven platformer featuring a robust procedural level generator, chaotic power-up stacking, and a deadly gauntlet of obstacles. Built with Vanilla JavaScript and HTML5 Canvas.
+A fast, procedural platformer with readable movement, confirm-to-use teleporters, power-ups, hazards, and multiple enemy types.
 
-## 🚀 Recent Upgrades
+## Features
 
-- **Power-Up Stacking**: You can now collect and stack multiple physics-warping power-ups simultaneously! The HUD dynamically tracks every active ability with individual countdown timers.
-- **Cinematic Dash**: Hit `Space` for an explosive burst of movement. Features procedural ghost trails and impact sparks for maximum kinetic feel.
-- **Improved Camera**: Sophisticated lerp-based camera tracking that responds instantly to high-speed dashes and vertical launches.
+- Procedural levels with branch routes, checkpoints, teleporters, and themed set dressing
+- Tight platformer movement with coyote time, jump buffering, and dash movement
+- Teleporters that require touching the portal and pressing `Enter` or `E`
+- Enemies including stalkers, hoverers, sentinels, and gap guards
+- Power-ups, hazards, and a simple HUD
 
-## 📦 Power-Ups (The Chaos Array)
+## Controls
 
-- **Double Dash** (Cyan): Grants extra dash charges.
-- **High Jump** (Green): Massive boost to your leap power.
-- **Anti-Gravity** (Magenta): Defy physics with upward lift.
-- **Super Speed** (Yellow): Move faster than the procedural generator intended.
-- **Giant Box** (Red): Triple your physical presence (and hitbox).
-- **Mini Box** (Orange): Shrink down to squeeze through tight gaps.
-- **Ice Physics** (Glacial Blue): Zero friction movement for extreme sliding.
-- **Ghost Mode** (Dark Grey): Dash through solid walls! (Ignores collisions during the dash).
-- **Feather Flow** (Pink): Drastically reduces fall speed for graceful gliding.
+- `Arrow Keys`: Move and jump
+- `Space`: Dash
+- `Enter` or `E`: Activate teleporters
+- `Enter` or `Space` on Game Over: Generate a new level
 
-## ⚠️ Hazard & Obstacle Systems
+## Files
 
-- **Lethal Spikes**: Sharp red traps anchored to platforms. Touch once to lose a life.
-- **Roaming Sawblades**: Spinning metallic discs that patrol platforms. Features circular collision detection and aggressive visual rotation.
-- **Bounce Pads** (Neon Cyan): Overrides gravity to launch you into the stratosphere.
-- **Crumble Platforms**: Brown blocks that vibrate and vanish shortly after contact.
-- **Solid Scenery**: Those statues and vases aren't just for show—you can now jump on them!
+- `index.html`: Entry point
+- `game.js`: Game loop, player physics, rendering, and interactions
+- `platforms.js`: Procedural level generator
+- `enemy.js`: Enemy behaviors and rendering
 
-## ❤️ Game Systems
+## Run
 
-- **Lives System**: You start with 3 lives. Falling off the world or hitting hazards decrements your life count.
-- **Procedural Re-roll**: On Game Over, the engine wipes the existing seed and generates a brand new, mathematically solvable gauntlet instantly.
-- **Score/Goal Tracking**: Reach the Purple Exit at the end of the cavern to complete your run.
-
-## ⌨️ Controls
-
-- **Arrow Keys**: Move and Jump.
-- **Space**: High-speed Dash.
-- **Enter/Space (Game Over)**: Respawn with a fresh procedural level.
-
-## 🛠️ Installation & Usage
-
-1. Clone or download this project folder.
-2. Open `index.html` in any modern browser.
-3. Every refresh (or death-reset) provides a unique, guaranteed-solvable challenge.
-
-## 🏗️ Architecture
-
-- `index.html`: Entry point & basic CSS rules.
-- `game.js`: Core game loop, multi-state physics engine, power-up management, and visual particle rendering.
-- `platforms.js`: The "Brain". Handles path validation, hazard placement, and PRNG-based level architecture.
+Open `index.html` in a browser.

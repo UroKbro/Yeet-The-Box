@@ -45,6 +45,10 @@
     return Math.max(lo, Math.min(hi, v));
   }
 
+  function lerp(a, b, t) {
+    return a + (b - a) * t;
+  }
+
   function getPlatformById(platforms, id) {
     if (id == null) return null;
     for (const p of platforms) {
@@ -56,7 +60,10 @@
   function calcDetectionBox(e) {
     const w = e.detectionBox?.w ?? 260;
     const h = e.detectionBox?.h ?? 120;
-    const ox = e.detectionBox?.ox ?? (e.facing >= 0 ? 40 : -40 - w);
+    const lead = e.detectionBox?.lead ?? 40;
+    const ox = e.detectionBox?.followFacing
+      ? (e.facing >= 0 ? lead : -lead - w)
+      : (e.detectionBox?.ox ?? (e.facing >= 0 ? 40 : -40 - w));
     const oy = e.detectionBox?.oy ?? -40;
     return { x: e.x + ox, y: e.y + oy, w, h };
   }
@@ -97,7 +104,13 @@
       attackTargetX: null,
       attackTargetY: null,
       predictedX: null,
-      predictedY: null
+      predictedY: null,
+      hp: 1,
+      maxHp: 1,
+      dead: false,
+      deadAt: 0,
+      hurtUntil: 0,
+      invulnerableUntil: 0
     };
   }
 
@@ -118,7 +131,10 @@
       e.patrolMinX = platform.x;
       e.patrolMaxX = platform.x + platform.w - e.w;
       e.aggroRange = spawn.aggroRange ?? 260;
-      e.detectionBox = { w: e.aggroRange, h: 140, ox: e.facing >= 0 ? 30 : -30 - e.aggroRange, oy: -60 };
+      e.detectionBox = { w: e.aggroRange, h: 140, lead: 30, oy: -60, followFacing: true };
+      e.hoverBob = randomSeedFromId(idx) * Math.PI * 2;
+      e.hp = 2;
+      e.maxHp = 2;
       return e;
     }
 
@@ -136,6 +152,9 @@
       e.speed = 0;
       e.aggroRange = spawn.aggroRange ?? 240;
       e.activeWindowMs = spawn.activeWindowMs ?? 260;
+      e.hoverBob = randomSeedFromId(idx) * Math.PI * 2;
+      e.hp = 2;
+      e.maxHp = 2;
       return e;
     }
 
@@ -151,6 +170,9 @@
       e.homeX = e.spawnX;
       e.homeY = e.spawnY;
       e.aggroRange = spawn.aggroRange ?? 520;
+      e.hoverBob = randomSeedFromId(idx) * Math.PI * 2;
+      e.hp = 2;
+      e.maxHp = 2;
       return e;
     }
 
@@ -165,11 +187,37 @@
       e.aggroRange = spawn.aggroRange ?? 360;
       e.homeX = x;
       e.homeY = y;
-      e.hoverPhase = random() * Math.PI * 2;
+      e.hoverPhase = randomSeedFromId(idx + 100) * Math.PI * 2;
+      e.hoverBob = randomSeedFromId(idx + 200) * Math.PI * 2;
+      e.hp = 3;
+      e.maxHp = 3;
+      return e;
+    }
+
+    if (type === "razorbat") {
+      const w = 34;
+      const h = 20;
+      const x = spawn.x ?? (platform.x + platform.w * 0.5 - w * 0.5);
+      const y = spawn.y ?? (platform.y - 110);
+      const e = makeBaseEnemy(`razorbat_${idx}`, type, x, y, w, h, platform.id);
+      e.state = ENEMY_STATES.PATROL;
+      e.speed = spawn.speed ?? 235;
+      e.aggroRange = spawn.aggroRange ?? 340;
+      e.homeX = x;
+      e.homeY = y;
+      e.hoverPhase = randomSeedFromId(idx + 300) * Math.PI * 2;
+      e.hoverBob = randomSeedFromId(idx + 400) * Math.PI * 2;
+      e.hp = 1;
+      e.maxHp = 1;
       return e;
     }
 
     return null;
+  }
+
+  function randomSeedFromId(id) {
+    const n = (id + 1) * 16807 % 2147483647;
+    return (n % 1000) / 1000;
   }
 
   function createEnemies(level) {
@@ -206,12 +254,13 @@
     }
 
     if (e.state === ENEMY_STATES.PATROL) {
-      e.vx = e.facing * e.speed;
+      e.vx = lerp(e.vx, e.facing * e.speed, Math.min(1, dt * 7));
     } else if (e.state === ENEMY_STATES.PURSUIT) {
       const targetX = clamp(player.x + player.w * 0.5 - e.w * 0.5, e.patrolMinX, e.patrolMaxX);
-      const dir = targetX > e.x ? 1 : -1;
+      const dx = targetX - e.x;
+      const dir = Math.abs(dx) < 3 ? e.facing : (dx > 0 ? 1 : -1);
       e.facing = dir;
-      e.vx = dir * (e.speed * 1.15);
+      e.vx = lerp(e.vx, dir * (e.speed * 1.15), Math.min(1, dt * 9));
     } else if (e.state === ENEMY_STATES.RETURN) {
       const homeX = clamp(e.spawnX, e.patrolMinX, e.patrolMaxX);
       const dx = homeX - e.x;
@@ -222,7 +271,7 @@
       } else {
         const dir = dx > 0 ? 1 : -1;
         e.facing = dir;
-        e.vx = dir * e.speed;
+        e.vx = lerp(e.vx, dir * e.speed, Math.min(1, dt * 8));
       }
     }
 
@@ -230,9 +279,11 @@
     const nextX = e.x + e.vx * dt;
     if (nextX <= e.patrolMinX) {
       e.x = e.patrolMinX;
+      e.vx = 0;
       e.facing = 1;
     } else if (nextX >= e.patrolMaxX) {
       e.x = e.patrolMaxX;
+      e.vx = 0;
       e.facing = -1;
     } else {
       e.x = nextX;
@@ -258,6 +309,8 @@
     if (e.state === ENEMY_STATES.ACTIVE && now > e.activeUntil) {
       setState(e, ENEMY_STATES.IDLE, now);
     }
+
+    e.vx = lerp(e.vx, 0, Math.min(1, dt * 10));
   }
 
   function updateHoverer(e, player, platforms, dt, now) {
@@ -290,12 +343,12 @@
     const vx = tx - cx;
     const vy = ty - cy;
     const len = Math.sqrt(vx * vx + vy * vy) || 1;
-    const maxStep = (e.speed ?? 190) * dt;
-
-    // Smooth arrival.
-    const step = Math.min(maxStep, len);
-    e.x += (vx / len) * step;
-    e.y += (vy / len) * step;
+    const desiredVx = (vx / len) * (e.speed ?? 190);
+    const desiredVy = (vy / len) * (e.speed ?? 190);
+    e.vx = lerp(e.vx, desiredVx, Math.min(1, dt * 4.8));
+    e.vy = lerp(e.vy, desiredVy, Math.min(1, dt * 4.8));
+    e.x += e.vx * dt;
+    e.y += e.vy * dt;
     e.facing = vx >= 0 ? 1 : -1;
   }
 
@@ -323,11 +376,12 @@
     const vx = targetX - cx;
     const vy = targetY - cy;
     const len = Math.sqrt(vx * vx + vy * vy) || 1;
-    const maxStep = (e.speed ?? 210) * dt;
-    const step = Math.min(maxStep, len);
-
-    e.x += (vx / len) * step;
-    e.y += (vy / len) * step;
+    const desiredVx = (vx / len) * (e.speed ?? 210);
+    const desiredVy = (vy / len) * (e.speed ?? 210);
+    e.vx = lerp(e.vx, desiredVx, Math.min(1, dt * 5.2));
+    e.vy = lerp(e.vy, desiredVy, Math.min(1, dt * 5.2));
+    e.x += e.vx * dt;
+    e.y += e.vy * dt;
     e.facing = vx >= 0 ? 1 : -1;
 
     if (!active && e.state === ENEMY_STATES.ACTIVE && now > e.activeUntil) {
@@ -341,14 +395,62 @@
     }
   }
 
+  function updateRazorbat(e, player, platforms, dt, now) {
+    const px = player.x + player.w * 0.5;
+    const py = player.y + player.h * 0.5;
+    const ex = e.x + e.w * 0.5;
+    const ey = e.y + e.h * 0.5;
+    const dx = px - ex;
+    const dy = py - ey;
+    const near = (dx * dx + dy * dy) <= (e.aggroRange * e.aggroRange);
+
+    if (near && now - e.lastAttackAt > 1150 && e.state !== ENEMY_STATES.ACTIVE) {
+      e.lastAttackAt = now;
+      e.activeUntil = now + 360;
+      e.attackTargetX = px + Math.sign(dx || 1) * 50;
+      e.attackTargetY = py - 12;
+      setState(e, ENEMY_STATES.ACTIVE, now);
+    }
+
+    let targetX = e.homeX + Math.cos(now / 260 + e.hoverPhase) * 26;
+    let targetY = e.homeY + Math.sin(now / 190 + e.hoverPhase) * 16;
+
+    if (e.state === ENEMY_STATES.ACTIVE && now <= e.activeUntil) {
+      targetX = e.attackTargetX;
+      targetY = e.attackTargetY;
+    } else if (e.state === ENEMY_STATES.ACTIVE && now > e.activeUntil) {
+      setState(e, ENEMY_STATES.RETURN, now);
+    }
+
+    if (e.state === ENEMY_STATES.RETURN) {
+      targetX = e.homeX;
+      targetY = e.homeY;
+      if (Math.abs(ex - e.homeX) < 10 && Math.abs(ey - e.homeY) < 10) {
+        setState(e, ENEMY_STATES.PATROL, now);
+      }
+    }
+
+    const vx = targetX - ex;
+    const vy = targetY - ey;
+    const len = Math.sqrt(vx * vx + vy * vy) || 1;
+    const desiredVx = (vx / len) * (e.speed ?? 235);
+    const desiredVy = (vy / len) * (e.speed ?? 235);
+    e.vx = lerp(e.vx, desiredVx, Math.min(1, dt * 8));
+    e.vy = lerp(e.vy, desiredVy, Math.min(1, dt * 8));
+    e.x += e.vx * dt;
+    e.y += e.vy * dt;
+    e.facing = vx >= 0 ? 1 : -1;
+  }
+
   function updateEnemies(enemies, player, platforms, dt, now) {
     if (!enemies || enemies.length === 0) return;
     for (const e of enemies) {
-      if (!e) continue;
+      if (!e || e.dead) continue;
       if (e.type === "pacingStalker") updatePacingStalker(e, player, platforms, dt, now);
       else if (e.type === "gapGuard") updateGapGuard(e, player, platforms, dt, now);
       else if (e.type === "hoverer") updateHoverer(e, player, platforms, dt, now);
       else if (e.type === "sentinel") updateSentinel(e, player, platforms, dt, now);
+      else if (e.type === "razorbat") updateRazorbat(e, player, platforms, dt, now);
     }
   }
 
@@ -363,7 +465,7 @@
   function checkEnemyCollisions(enemies, player, now) {
     if (!enemies || enemies.length === 0) return false;
     for (const e of enemies) {
-      if (!e) continue;
+      if (!e || e.dead) continue;
       const box = enemyCollisionBox(e, now);
       if (aabbOverlaps(box, player)) return true;
     }
@@ -374,8 +476,17 @@
     if (!enemies || enemies.length === 0) return;
 
     for (const e of enemies) {
+      if (e.dead && now - e.deadAt > 260) continue;
+      const bob = e.type === "hoverer"
+        ? Math.sin(now / 180 + (e.hoverBob || 0)) * 4
+        : Math.sin(now / 260 + (e.hoverBob || 0)) * 1.5;
       const sx = e.x - camera.x;
-      const sy = e.y - camera.y;
+      const sy = e.y - camera.y + bob;
+      const hurtAlpha = e.hurtUntil && now < e.hurtUntil ? 0.55 : 1;
+      const deathAlpha = e.dead ? Math.max(0, 1 - (now - e.deadAt) / 260) : 1;
+
+      ctx.save();
+      ctx.globalAlpha = hurtAlpha * deathAlpha;
 
       if (e.type === "pacingStalker") {
         ctx.fillStyle = "#2B2B2B";
@@ -451,7 +562,21 @@
         ctx.arc(0, 0, 4, 0, Math.PI * 2);
         ctx.fill();
         ctx.restore();
+      } else if (e.type === "razorbat") {
+        const active = e.state === ENEMY_STATES.ACTIVE && now <= e.activeUntil;
+        ctx.fillStyle = active ? "#FF6B6B" : "#A1395C";
+        ctx.beginPath();
+        ctx.moveTo(sx, sy + e.h * 0.5);
+        ctx.quadraticCurveTo(sx + e.w * 0.25, sy - 10, sx + e.w * 0.5, sy + e.h * 0.35);
+        ctx.quadraticCurveTo(sx + e.w * 0.75, sy - 10, sx + e.w, sy + e.h * 0.5);
+        ctx.quadraticCurveTo(sx + e.w * 0.75, sy + e.h, sx + e.w * 0.5, sy + e.h * 0.7);
+        ctx.quadraticCurveTo(sx + e.w * 0.25, sy + e.h, sx, sy + e.h * 0.5);
+        ctx.fill();
+        ctx.fillStyle = "#FFFFFF";
+        ctx.fillRect(sx + (e.facing >= 0 ? e.w * 0.62 : e.w * 0.18), sy + e.h * 0.32, 4, 4);
       }
+
+      ctx.restore();
 
       if (DEBUG.enabled && DEBUG.showDetection && e.type === "pacingStalker") {
         const det = calcDetectionBox(e);

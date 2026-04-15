@@ -1,8 +1,8 @@
 function createLevelGenerator() {
   const PLAYER = {
-    jump_power: 15,
-    gravity: 0.475,
-    max_speed: 4.5,
+    jump_power: 16.5,
+    gravity: 0.52,
+    max_speed: 5.2,
     dash_speed: 12,
     dash_duration_frames: Math.floor(120 / 16.67),
     player_w: 50,
@@ -20,8 +20,12 @@ function createLevelGenerator() {
     "icePhysics",
     "ghost",
     "miniBox",
-    "feather"
+    "feather",
+    "overcharge",
+    "magnet"
   ];
+
+  const ATTACK_PICKUP_TYPES = ["chakram", "burst"];
 
   const THEMES = {
     ruins: {
@@ -29,6 +33,7 @@ function createLevelGenerator() {
       hard: "#C97B35",
       shared: "#5C7AEA",
       branch: "#8A6F50",
+      reward: "#D7B84F",
       background: "rgba(82, 78, 72, 0.18)"
     },
     cavern: {
@@ -36,6 +41,7 @@ function createLevelGenerator() {
       hard: "#D16C3F",
       shared: "#4C6FFF",
       branch: "#6D5A4E",
+      reward: "#E6C85C",
       background: "rgba(73, 94, 90, 0.18)"
     },
     fortress: {
@@ -43,6 +49,7 @@ function createLevelGenerator() {
       hard: "#D06464",
       shared: "#7A6FF0",
       branch: "#7E746B",
+      reward: "#D7B347",
       background: "rgba(74, 74, 82, 0.18)"
     },
     industrial: {
@@ -50,6 +57,7 @@ function createLevelGenerator() {
       hard: "#E0764E",
       shared: "#6D6CFF",
       branch: "#7F6F58",
+      reward: "#F2C84B",
       background: "rgba(93, 94, 98, 0.18)"
     },
     overgrown: {
@@ -57,6 +65,7 @@ function createLevelGenerator() {
       hard: "#C96A3C",
       shared: "#5A78F2",
       branch: "#76644A",
+      reward: "#D3C058",
       background: "rgba(58, 89, 60, 0.18)"
     }
   };
@@ -369,10 +378,12 @@ function createLevelGenerator() {
 
       const segmentBaseY = lerp(fromAnchor.y, toAnchor.y, t);
       const wave = Math.sin(t * Math.PI * (hard ? 3.4 : 1.8) + random()) * (hard ? profile.hardAmplitude : profile.easyAmplitude);
+      const rawY = Math.round(segmentBaseY + wave + ri(hard ? -55 : -25, hard ? 55 : 25));
+      const maxStepY = hard ? 120 : 82;
       let y = clamp(
-        Math.round(segmentBaseY + wave + ri(hard ? -55 : -25, hard ? 55 : 25)),
-        170,
-        profile.worldHeight - (hard ? 300 : 220)
+        rawY,
+        Math.max(170, current.y - maxStepY),
+        Math.min(profile.worldHeight - (hard ? 300 : 220), current.y + maxStepY)
       );
 
       const platform = makePathPlatform(pathType, x, y, width, {
@@ -496,10 +507,10 @@ function createLevelGenerator() {
       const direction = chance(0.5) ? 1 : -1;
 
       for (let step = 0; step < branchDepth; step++) {
-        const gap = ri(90, 180);
+        const gap = ri(90, 150);
         const width = ri(90, 150);
         const x = current.x + (direction > 0 ? current.w + gap : -(gap + width));
-        const y = clamp(current.y + ri(-160, 160), 190, profile.worldHeight - 240);
+        const y = clamp(current.y + ri(-110, 110), 190, profile.worldHeight - 240);
         const travelHint = step === branchDepth - 1 && chance(0.4) ? "dash_reward_branch" : "dash_optional";
         const tier = step === branchDepth - 1 && chance(0.35) ? "hazardous" : "optional";
         const type = tier === "hazardous" && chance(0.65) ? "crumble" : "deadend";
@@ -568,7 +579,7 @@ function createLevelGenerator() {
     });
 
     candidates.sort((a, b) => (a.x - b.x) || (a.y - b.y));
-    let powerIndex = 0;
+    let powerIndex = ri(0, POWER_UP_TYPES.length - 1);
     let lastPowerX = -9999;
 
     for (const platform of candidates) {
@@ -584,6 +595,44 @@ function createLevelGenerator() {
       platform.powerUpType = POWER_UP_TYPES[powerIndex % POWER_UP_TYPES.length];
       powerIndex++;
       lastPowerX = platform.x;
+    }
+  }
+
+  function attachSpecialPlatforms(platforms, profile) {
+    for (const p of platforms) {
+      if (p.isBackground || p.isHiddenScenery) continue;
+      if (p.role === "start" || p.role === "goal" || p.role === "anchor") continue;
+      if (p.type !== "standard" && p.type !== "deadend" && p.type !== "risk") continue;
+      if (p.w < 110) continue;
+
+      if (
+        p.pathType === "easy" &&
+        p.role === "path" &&
+        p.w >= 150 &&
+        chance(0.16)
+      ) {
+        p.type = "conveyor";
+        p.conveyorSpeed = chance(0.5) ? -(1.1 + random() * 0.6) : (1.1 + random() * 0.6);
+        p.supportsEnemy = false;
+        p.supportsHazard = false;
+        continue;
+      }
+
+      if (
+        p.pathType === "branch" &&
+        p.role === "branch" &&
+        p.tier !== "critical" &&
+        chance(0.18)
+      ) {
+        p.type = "phase";
+        p.phasePeriod = 1500 + ri(0, 700);
+        p.phaseDuty = 0.58 + random() * 0.1;
+        p.phaseOffset = ri(0, 1200);
+        p.hasPowerUp = false;
+        p.supportsPowerUp = false;
+        p.supportsEnemy = false;
+        p.supportsHazard = false;
+      }
     }
   }
 
@@ -696,10 +745,50 @@ function createLevelGenerator() {
     }
   }
 
+  function attachAttackPickups(platforms, leafNodes) {
+    const candidates = [];
+
+    for (const leaf of leafNodes) {
+      if (leaf.isBackground || leaf.isHiddenScenery) continue;
+      if (leaf.hasPowerUp || leaf.enemySpawn || leaf.hasAttackPickup) continue;
+      if (leaf.supportsPowerUp === false || leaf.w < 100) continue;
+      candidates.push(leaf);
+    }
+
+    for (const platform of platforms) {
+      if (platform.pathType !== "hard" || platform.role !== "path") continue;
+      if (platform.hasPowerUp || platform.enemySpawn || platform.hasAttackPickup) continue;
+      if (platform.hasSawblade || platform.type === "crumble" || platform.w < 120) continue;
+      candidates.push(platform);
+    }
+
+    let placed = 0;
+    for (const attackType of ATTACK_PICKUP_TYPES) {
+      const platform = candidates.find((candidate) => !candidate.hasAttackPickup);
+      if (!platform) break;
+      platform.hasAttackPickup = true;
+      platform.attackPickupType = attackType;
+      platform.rewardScore = (platform.rewardScore || 0) + 3;
+      placed++;
+    }
+
+    return placed;
+  }
+
   function attachEnemySpawns(platforms, leafNodes, profile) {
     const hardCandidates = platforms.filter((p) => p.pathType === "hard" && p.edgeType === "dash_gate" && p.w >= 110 && !p.hasPowerUp && !p.hasSawblade);
     const stalkerCandidates = platforms.filter((p) => p.pathType === "easy" && p.role === "path" && p.w >= 190 && !p.hasPowerUp && !p.hasSawblade && !p.enemySpawn);
     const sentinelCandidates = platforms.filter((p) => p.pathType === "hard" && p.role === "path" && p.w >= 150 && !p.hasPowerUp && !p.hasSawblade && !p.enemySpawn);
+    const razorbatCandidates = platforms.filter((p) =>
+      !p.isBackground &&
+      !p.isHiddenScenery &&
+      !p.enemySpawn &&
+      !p.hasSawblade &&
+      !p.hasPowerUp &&
+      (p.pathType === "hard" || p.pathType === "branch") &&
+      p.w >= 120 &&
+      p.type !== "phase"
+    );
 
     for (const p of hardCandidates) {
       if (chance(profile.enemyChance * 0.85)) {
@@ -733,6 +822,18 @@ function createLevelGenerator() {
         interceptLeadTime: 0.25 + random() * 0.18
       };
     }
+
+    let batsPlaced = 0;
+    for (const p of razorbatCandidates) {
+      if (batsPlaced >= 4) break;
+      if (!chance(0.16 + profile.enemyChance * 0.35)) continue;
+      p.enemySpawn = {
+        type: "razorbat",
+        aggroRange: 300 + ri(0, 90),
+        speed: 210 + ri(0, 50)
+      };
+      batsPlaced++;
+    }
   }
 
   function assignSceneryAndSecrets(leafNodes, profile) {
@@ -742,7 +843,7 @@ function createLevelGenerator() {
         leaf.sceneryType = chance(0.5) ? "OLD_STATUE" : "VASE";
         leaf.rewardScore += 2;
       }
-      if (!leaf.hasPowerUp && chance(profile.rewardChance * 0.45)) {
+      if (!leaf.hasPowerUp && leaf.supportsPowerUp !== false && chance(profile.rewardChance * 0.45)) {
         leaf.hasPowerUp = true;
         leaf.powerUpType = POWER_UP_TYPES[ri(0, POWER_UP_TYPES.length - 1)];
       }
@@ -822,12 +923,44 @@ function createLevelGenerator() {
       p.pathType === "branch"
     );
 
+    const exitCandidates = platforms.filter((p) =>
+      !p.isBackground &&
+      !p.isHiddenScenery &&
+      p.role !== "branch" &&
+      p.type !== "spike" &&
+      p.type !== "ghost" &&
+      p.w >= 120
+    );
+
+    function pickExitPlatform(entryPlatform) {
+      let best = null;
+      let bestScore = Infinity;
+
+      for (const candidate of exitCandidates) {
+        if (candidate.x >= entryPlatform.x - 280) continue;
+        const dx = entryPlatform.x - candidate.x;
+        const dy = Math.abs(candidate.y - entryPlatform.y);
+        if (dx < 360 || dy > 220) continue;
+
+        const checkpointBonus = candidate.isCheckpoint ? -180 : 0;
+        const anchorBonus = candidate.role === "anchor" ? -120 : 0;
+        const pathBonus = candidate.role === "path" ? -60 : 0;
+        const score = dx * 0.55 + dy * 1.4 + checkpointBonus + anchorBonus + pathBonus;
+
+        if (score < bestScore) {
+          bestScore = score;
+          best = candidate;
+        }
+      }
+
+      return best;
+    }
+
     let pairId = 0;
     for (const entryPlatform of entries) {
       if (!chance(0.28)) continue;
-      const safeIndex = clamp(ri(0, Math.max(0, anchors.length - 2)), 0, Math.max(0, anchors.length - 2));
-      const exitAnchor = anchors[safeIndex];
-      if (!exitAnchor || exitAnchor.x >= entryPlatform.x - 300) continue;
+      const exitPlatform = pickExitPlatform(entryPlatform);
+      if (!exitPlatform) continue;
 
       teleporters.push({
         id: `tele_${pairId++}`,
@@ -838,10 +971,10 @@ function createLevelGenerator() {
           platformId: entryPlatform.id
         },
         exit: {
-          x: exitAnchor.x + exitAnchor.w * 0.5,
-          y: exitAnchor.y - 30,
+          x: exitPlatform.x + exitPlatform.w * 0.5,
+          y: exitPlatform.y - 30,
           r: 24,
-          platformId: exitAnchor.id
+          platformId: exitPlatform.id
         },
         color: THEMES[profile.theme].shared,
         kind: "loopback"
@@ -940,10 +1073,12 @@ function createLevelGenerator() {
     const { branches, branchEdges, leafNodes } = generateOptionalBranches(actionPlatforms, profile);
     const platforms = [...actionPlatforms, ...branches];
 
+    attachSpecialPlatforms(platforms, profile);
     reservePowerUpSlots(platforms, profile);
     assignSceneryAndSecrets(leafNodes, profile);
     attachHazards(platforms, profile);
     attachSupportFeatures(platforms, anchors, profile);
+    attachAttackPickups(platforms, leafNodes);
     attachEnemySpawns(platforms, leafNodes, profile);
 
     addLightGuidance(platforms, anchors, profile);
