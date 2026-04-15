@@ -235,6 +235,13 @@ function createLevelGenerator() {
             fake.hasScenery = chance(0.5);
             fake.sceneryType = chance(0.5) ? 'OLD_STATUE' : 'VASE';
             fakes.push(fake);
+
+            if (fake.hasScenery) {
+                // Generate a solid hidden block strictly mapped exactly over the scenery drawing
+                const sceneryBlock = Platform(fake.x + fake.w / 2 - 10, fake.y - 38, 20, 38, 'standard', 'sceneryBlock');
+                sceneryBlock.isHiddenScenery = true; 
+                fakes.push(sceneryBlock);
+            }
           }
         }
       });
@@ -244,6 +251,30 @@ function createLevelGenerator() {
     // Add fakes extending from both paths limits
     const fake_plats = generate_fake_platforms([...easyPath, ...hardPath]);
     all_platforms.push(...fake_plats);
+
+    // Obstacles and Hazards
+    [...easyPath, ...hardPath].forEach(p => {
+        if (p.type === 'start' || p.type === 'exit' || p.type === 'ghost') return;
+        
+        // 10% chance to turn into a bounce pad
+        if (chance(0.1)) {
+            p.type = 'bounce';
+            return; // No other hazards on a bounce pad
+        }
+
+        // 20% chance for a stationary spike
+        if (chance(0.2)) {
+            const spike = Platform(p.x + ri(5, Math.max(5, p.w - 25)), p.y - 20, 20, 20, 'spike', 'hazard');
+            all_platforms.push(spike);
+        } 
+        // Or a 15% chance for a moving sawblade if the platform is wide enough
+        else if (p.w >= 100 && chance(0.15)) {
+            p.hasSawblade = true;
+            p.sawX = p.w / 2; // Local to platform
+            p.sawSpeed = chance(0.5) ? 60 : -60; // Pixels per second
+            p.sawSize = 15;
+        }
+    });
 
     // Context / Decor Additions (Ground, Ceiling, Parallax)
     all_platforms.push(Platform(0, GROUND_Y, worldWidth, 50, 'ground')); // Floor

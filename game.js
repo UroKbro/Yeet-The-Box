@@ -70,19 +70,10 @@ window.onload = function () {
         height: 2000
     };
 
-    const level = generateLevel(Date.now(), 2, world.width, world.height);
-    player.x = level.startPos.x;
-    player.y = level.startPos.y;
-
-    const platforms = level.platforms.map((platform, index) => ({
-        ...platform,
-        id: index,
-        crumbleDelay: platform.crumbleDuration || (platform.type === "crumble" ? 500 : 0),
-        crumbleResetDelay: platform.type === "crumble" ? 2400 : 0,
-        crumbleState: platform.type === "crumble" ? "idle" : "stable",
-        crumbleTriggeredAt: 0,
-        respawnAt: 0
-    }));
+    let level;
+    let platforms;
+    let lives = 3;
+    let gameState = "playing"; // "playing" | "game_over"
 
     const camera = {
         x: 0,
@@ -95,7 +86,64 @@ window.onload = function () {
     function isPlatformSolid(platform) {
         if (platform.isBackground) return false;
         if (platform.type === "crumble" && platform.crumbleState === "hidden") return false;
+        if (platform.type === "spike") return false; // Physics pass-through natively so death handler triggers explicitly
         return true;
+    }
+
+    function initLevel() {
+        level = generateLevel(Date.now(), 2, world.width, world.height);
+        player.x = level.startPos.x;
+        player.y = level.startPos.y;
+        player.vx = 0;
+        player.vy = 0;
+        player.dashTime = 0;
+        player.state = "air";
+        player.powerUps = {};
+        player.dashCharges = player.maxDashCharges;
+        player.dashRequested = false;
+        player.trail = [];
+        
+        platforms = level.platforms.map((platform, index) => ({
+            ...platform,
+            id: index,
+            crumbleDelay: platform.crumbleDuration || (platform.type === "crumble" ? 500 : 0),
+            crumbleResetDelay: platform.type === "crumble" ? 2400 : 0,
+            crumbleState: platform.type === "crumble" ? "idle" : "stable",
+            crumbleTriggeredAt: 0,
+            respawnAt: 0
+        }));
+
+        camera.x = player.x;
+        camera.y = player.y;
+    }
+
+    function resetGame() {
+        lives = 3;
+        gameState = "playing";
+        initLevel();
+    }
+
+    initLevel();
+
+    function die() {
+        lives--;
+        if (lives <= 0) {
+            gameState = "game_over";
+            return;
+        }
+
+        player.x = level.startPos.x;
+        player.y = level.startPos.y;
+        player.vx = 0;
+        player.vy = 0;
+        player.dashTime = 0;
+        player.state = "air";
+        player.powerUps = {}; // All powers vanish!
+        player.dashCharges = player.maxDashCharges;
+        player.dashRequested = false;
+        player.trail = [];
+        camera.x = player.x;
+        camera.y = player.y;
     }
 
     function triggerCrumble(platform) {
@@ -134,7 +182,7 @@ window.onload = function () {
         if (e.key === "ArrowUp") player.lastJumpPress = Date.now();
 
         if (e.code === "Space") {
-            player.dashRequested = true;
+            if (gameState === "playing") player.dashRequested = true;
         }
 
         if ((e.key && e.key.startsWith("Arrow")) || e.code === "Space") {
@@ -189,6 +237,15 @@ window.onload = function () {
     }
 
     function update(dt) {
+        if (gameState === "game_over") {
+            if (keys["Enter"] || keys[" "]) {
+                resetGame();
+                keys["Enter"] = false; // Prevent immediate rebinding
+                keys[" "] = false;
+            }
+            return;
+        }
+
         const prevY = player.y;
         const now = Date.now();
 
@@ -248,6 +305,31 @@ window.onload = function () {
             if (now - player.lastDashTime > player.dashCooldown) {
                 player.dashCharges = player.maxDashCharges;
             }
+        }
+
+        // ===== DEATH HANDLERS =====
+        if (player.y > world.height + 200) {
+            die();
+            return; // Halt update frame
+        }
+
+        let touchingSpike = false;
+        for (let p of platforms) {
+            if (p.type === "spike") {
+                if (
+                    player.x < p.x + p.w &&
+                    player.x + player.w > p.x &&
+                    player.y < p.y + p.h &&
+                    player.y + player.h > p.y
+                ) {
+                    touchingSpike = true;
+                    break;
+                }
+            }
+        }
+        if (touchingSpike) {
+            die();
+            return; // Halt update frame
         }
 
         // ===== DASH STATE =====
@@ -387,11 +469,44 @@ window.onload = function () {
                     player.vy = 0;
                     player.onGround = true;
                     player.lastGrounded = Date.now();
-                    triggerCrumble(p);
-                    setState("grounded");
+                    
+                    if (p.type === "bounce") {
+                        player.vy = -35; // Launch the player extremely high
+                        player.onGround = false;
+                        setState("air");
+                    } else {
+                        triggerCrumble(p);
+                        setState("grounded");
+                    }
                 } else if (player.vy < 0) {
                     player.y = p.y + p.h;
                     player.vy = 0;
+                }
+            }
+        }
+
+        // ===== SAWBLADES =====
+        for (let p of platforms) {
+            if (p.hasSawblade) {
+                p.sawX += p.sawSpeed * dt;
+                if (p.sawX < 0) {
+                    p.sawX = 0;
+                    p.sawSpeed *= -1;
+                } else if (p.sawX > p.w) {
+                    p.sawX = p.w;
+                    p.sawSpeed *= -1;
+                }
+
+                // Check fatal circular collision
+                const sawWorldX = p.x + p.sawX;
+                const sawWorldY = p.y - p.sawSize;
+                const px = player.x + player.w / 2;
+                const py = player.y + player.h / 2;
+                const dist = Math.sqrt((sawWorldX - px) ** 2 + (sawWorldY - py) ** 2);
+                
+                if (dist < p.sawSize + Math.min(player.w, player.h) / 2) {
+                    die();
+                    return; // Halt update frame
                 }
             }
         }
@@ -459,6 +574,10 @@ window.onload = function () {
 
             if (p.type === "ghost") {
                 ctx.fillStyle = "rgba(100, 100, 100, 0.25)";
+            } else if (p.type === "spike") {
+                ctx.fillStyle = "#FF0000"; // Lethal red spikes
+            } else if (p.type === "bounce") {
+                ctx.fillStyle = "#00FFCC"; // Neon cyan bounce pad
             } else if (p.type === "ground") {
                 ctx.fillStyle = "#245C24";
             } else if (p.colorHint) {
@@ -482,6 +601,40 @@ window.onload = function () {
             }
 
             ctx.fillRect(drawX, drawY, p.w, p.h);
+
+            // Sawblade Hazard Execution
+            if (p.hasSawblade) {
+                const sawScreenX = drawX + p.sawX;
+                const sawScreenY = drawY - p.sawSize;
+                
+                // Draw spinning saw blade
+                ctx.save();
+                ctx.translate(sawScreenX, sawScreenY);
+                ctx.rotate(Date.now() / 100); // Continuous fast spin
+                
+                ctx.fillStyle = "#AAAAAA"; // Metal disc
+                ctx.beginPath();
+                ctx.arc(0, 0, p.sawSize, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Draw Saw teeth
+                ctx.fillStyle = "#FF0000";
+                for (let i = 0; i < 6; i++) {
+                    ctx.beginPath();
+                    ctx.moveTo(p.sawSize - 2, -3);
+                    ctx.lineTo(p.sawSize + 4, 0);
+                    ctx.lineTo(p.sawSize - 2, 3);
+                    ctx.fill();
+                    ctx.rotate((Math.PI * 2) / 6);
+                }
+                
+                ctx.fillStyle = "#000000"; // Center bolt
+                ctx.beginPath();
+                ctx.arc(0, 0, 3, 0, Math.PI * 2);
+                ctx.fill();
+                
+                ctx.restore();
+            }
 
             // Scenery / Set Dressing
             if (p.hasScenery) {
@@ -521,7 +674,7 @@ window.onload = function () {
                 else if (p.powerUpType === 'antiGravity') ctx.fillStyle = '#FF00FF';
                 else if (p.powerUpType === 'superSpeed') ctx.fillStyle = '#FFFF00';
                 else if (p.powerUpType === 'giantBox') ctx.fillStyle = '#FF0000';
-                else if (p.powerUpType === 'icePhysics') ctx.fillStyle = '#FFFFFF';
+                else if (p.powerUpType === 'icePhysics') ctx.fillStyle = '#66FFFF'; // Visually distinct glacial blue
                 else if (p.powerUpType === 'ghost') ctx.fillStyle = '#555555';
                 else if (p.powerUpType === 'miniBox') ctx.fillStyle = '#FFA500';
                 else if (p.powerUpType === 'feather') ctx.fillStyle = '#FFC0CB';
@@ -581,12 +734,31 @@ window.onload = function () {
         ctx.fillText("Space: dash", 28, 62);
         ctx.fillText(`Dash charges: ${player.dashCharges}`, 28, 82);
         
-        let py = 102;
+        ctx.fillStyle = "#FF4444";
+        ctx.fillText(`Lives: ${lives}`, 28, 102);
+
+        let py = 122;
         ctx.fillStyle = "#FFD700";
         for (let type of powerUpKeys) {
             const left = Math.ceil((player.powerUps[type] - Date.now()) / 1000);
             ctx.fillText(`PowerUp: ${type} (${left}s)`, 28, py);
             py += 20;
+        }
+
+        if (gameState === "game_over") {
+            ctx.fillStyle = "rgba(0, 0, 0, 0.85)";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            ctx.fillStyle = "#FF0000";
+            ctx.font = "bold 64px Arial";
+            ctx.textAlign = "center";
+            ctx.fillText("GAME OVER", canvas.width / 2, canvas.height / 2 - 20);
+
+            ctx.fillStyle = "#FFFFFF";
+            ctx.font = "24px Arial";
+            ctx.fillText("Press SPACE to generated a new level!", canvas.width / 2, canvas.height / 2 + 40);
+            
+            ctx.textAlign = "left"; // Reset context
         }
     }
 
