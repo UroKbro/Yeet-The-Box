@@ -6,7 +6,8 @@
         sandShuriken: { label: "Sand Shuriken", color: "#F4C97B" },
         iceNeedle: { label: "Ice Needle", color: "#8FE9FF" },
         thornBurst: { label: "Thorn Burst", color: "#7DFF8A" },
-        forgeShot: { label: "Forge Shot", color: "#FF8A4C" }
+        forgeShot: { label: "Forge Shot", color: "#FF8A4C" },
+        reboundDisk: { label: "Rebound Disk", color: "#8AE6FF" }
     };
 
     const POWER_UP_META = {
@@ -24,7 +25,8 @@
         sandSkimmer: { label: "Sand Skimmer", color: "#E9B96E" },
         glacierGrip: { label: "Glacier Grip", color: "#9EEBFF" },
         vineLeap: { label: "Vine Leap", color: "#8DFF9A" },
-        forgeRunner: { label: "Forge Runner", color: "#FF9A66" }
+        forgeRunner: { label: "Forge Runner", color: "#FF9A66" },
+        phaseStep: { label: "Phase Step", color: "#D5A6FF" }
     };
 
     function getThemePalette(level) {
@@ -79,8 +81,15 @@
             activeAttacks,
             attackProjectiles,
             currentAttackType,
+            bindingHints = {},
+            settingsOpen = false,
             now = Date.now()
         } = state;
+
+        window.GameRenderer.lastLayout = {
+            settingsResetButton: null,
+            settingsCloseButton: null
+        };
 
         ctx.clearRect(0, 0, canvas.width, canvas.height);
 
@@ -103,6 +112,31 @@
             ctx.arc(glowX, glowY, 180 + i * 24, 0, Math.PI * 2);
             ctx.fill();
         }
+
+        const worldType = level?.worldType || "foundry";
+        ctx.globalAlpha = 0.2;
+        for (let i = 0; i < 6; i++) {
+            const driftX = ((i + 1) / 7) * canvas.width + Math.sin(now / 3200 + i) * 70;
+            const driftY = 70 + i * 26 + Math.cos(now / 2700 + i) * 10;
+            if (worldType === "tundra") {
+                ctx.fillStyle = "#EAFBFF";
+                ctx.beginPath();
+                ctx.arc(driftX, driftY, 4 + (i % 3), 0, Math.PI * 2);
+                ctx.fill();
+            } else if (worldType === "overgrowth") {
+                ctx.fillStyle = "#95E38A";
+                ctx.beginPath();
+                ctx.arc(driftX, driftY, 5 + (i % 2), 0, Math.PI * 2);
+                ctx.fill();
+            } else if (worldType === "mesa") {
+                ctx.fillStyle = "#F2B36D";
+                ctx.fillRect(driftX, driftY, 10, 3);
+            } else {
+                ctx.fillStyle = "#D7DCE2";
+                ctx.fillRect(driftX, driftY, 8, 2);
+            }
+        }
+        ctx.globalAlpha = 1;
 
         const drawPlatforms = [...platforms].sort((a, b) => {
             if (a.isBackground === b.isBackground) return 0;
@@ -265,15 +299,100 @@
             }
 
             if (p.hasScenery) {
-                ctx.fillStyle = (p.sceneryType === "OLD_STATUE") ? "#A9A9A9" : "#D4AF37";
-                ctx.beginPath();
-                ctx.moveTo(drawX + p.w / 2, drawY);
-                ctx.lineTo(drawX + p.w / 2 - 10, drawY - 25);
-                ctx.lineTo(drawX + p.w / 2 + 10, drawY - 25);
-                ctx.fill();
-                ctx.beginPath();
-                ctx.arc(drawX + p.w / 2, drawY - 30, 8, 0, Math.PI * 2);
-                ctx.fill();
+                ctx.save();
+                ctx.shadowColor = "rgba(0, 0, 0, 0.28)";
+                ctx.shadowBlur = 6;
+                ctx.lineWidth = 2;
+                ctx.strokeStyle = "rgba(30, 24, 20, 0.38)";
+                if (p.sceneryType === "OLD_STATUE") {
+                    ctx.fillStyle = "#A9A9A9";
+                    ctx.beginPath();
+                    ctx.moveTo(drawX + p.w / 2, drawY);
+                    ctx.lineTo(drawX + p.w / 2 - 10, drawY - 25);
+                    ctx.lineTo(drawX + p.w / 2 + 10, drawY - 25);
+                    ctx.fill();
+                    ctx.stroke();
+                    ctx.beginPath();
+                    ctx.arc(drawX + p.w / 2, drawY - 30, 8, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.stroke();
+                } else if (p.sceneryType === "VASE") {
+                    ctx.fillStyle = "#D4AF37";
+                    ctx.fillRect(drawX + p.w / 2 - 7, drawY - 18, 14, 18);
+                    ctx.strokeRect(drawX + p.w / 2 - 7, drawY - 18, 14, 18);
+                } else if (p.sceneryType === "TOTEM") {
+                    ctx.fillStyle = "#8A5B3A";
+                    ctx.fillRect(drawX + p.w / 2 - 6, drawY - 28, 12, 28);
+                    ctx.strokeRect(drawX + p.w / 2 - 6, drawY - 28, 12, 28);
+                } else if (p.sceneryType === "DRY_SHRUB") {
+                    ctx.strokeStyle = "#B98952";
+                    ctx.beginPath();
+                    ctx.arc(drawX + p.w / 2, drawY - 8, 9, 0, Math.PI * 2);
+                    ctx.stroke();
+                } else if (p.sceneryType === "ICE_SPIKE") {
+                    ctx.fillStyle = "#D7F7FF";
+                    ctx.beginPath();
+                    ctx.moveTo(drawX + p.w / 2, drawY - 26);
+                    ctx.lineTo(drawX + p.w / 2 + 6, drawY - 4);
+                    ctx.lineTo(drawX + p.w / 2 - 6, drawY - 4);
+                    ctx.closePath();
+                    ctx.fill();
+                    ctx.stroke();
+                } else if (p.sceneryType === "CRYSTAL") {
+                    ctx.fillStyle = "#9EEBFF";
+                    ctx.beginPath();
+                    ctx.moveTo(drawX + p.w / 2, drawY - 24);
+                    ctx.lineTo(drawX + p.w / 2 + 12, drawY - 10);
+                    ctx.lineTo(drawX + p.w / 2 + 2, drawY);
+                    ctx.lineTo(drawX + p.w / 2 - 8, drawY - 12);
+                    ctx.closePath();
+                    ctx.fill();
+                    ctx.stroke();
+                } else if (p.sceneryType === "SNOWDRIFT") {
+                    ctx.fillStyle = "#F6FDFF";
+                    ctx.beginPath();
+                    ctx.arc(drawX + p.w / 2, drawY - 8, 10, Math.PI, 0);
+                    ctx.fill();
+                    ctx.stroke();
+                } else if (p.sceneryType === "TREE") {
+                    ctx.fillStyle = "#6F4D31";
+                    ctx.fillRect(drawX + p.w / 2 - 3, drawY - 22, 6, 22);
+                    ctx.fillStyle = "#4E9B59";
+                    ctx.beginPath();
+                    ctx.arc(drawX + p.w / 2, drawY - 28, 12, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.stroke();
+                } else if (p.sceneryType === "MUSHROOM") {
+                    ctx.fillStyle = "#D96C4E";
+                    ctx.fillRect(drawX + p.w / 2 - 4, drawY - 16, 8, 16);
+                    ctx.fillStyle = "#F2C97A";
+                    ctx.beginPath();
+                    ctx.arc(drawX + p.w / 2, drawY - 16, 10, Math.PI, 0);
+                    ctx.fill();
+                    ctx.stroke();
+                } else if (p.sceneryType === "FERN") {
+                    ctx.strokeStyle = "#7DFF8A";
+                    ctx.beginPath();
+                    ctx.moveTo(drawX + p.w / 2, drawY - 2);
+                    ctx.lineTo(drawX + p.w / 2 - 5, drawY - 18);
+                    ctx.moveTo(drawX + p.w / 2, drawY - 2);
+                    ctx.lineTo(drawX + p.w / 2 + 5, drawY - 18);
+                    ctx.stroke();
+                } else if (p.sceneryType === "GEAR") {
+                    ctx.strokeStyle = "#C8D0D9";
+                    ctx.beginPath();
+                    ctx.arc(drawX + p.w / 2, drawY - 12, 10, 0, Math.PI * 2);
+                    ctx.stroke();
+                } else if (p.sceneryType === "PIPE") {
+                    ctx.fillStyle = "#7A8088";
+                    ctx.fillRect(drawX + p.w / 2 - 8, drawY - 22, 16, 22);
+                    ctx.strokeRect(drawX + p.w / 2 - 8, drawY - 22, 16, 22);
+                } else if (p.sceneryType === "CRATE") {
+                    ctx.fillStyle = "#A37B4B";
+                    ctx.fillRect(drawX + p.w / 2 - 9, drawY - 18, 18, 18);
+                    ctx.strokeRect(drawX + p.w / 2 - 9, drawY - 18, 18, 18);
+                }
+                ctx.restore();
             }
 
             if (p.type === "reward") {
@@ -411,7 +530,7 @@
             ctx.fillStyle = "#FFFFFF";
             ctx.font = "14px Arial";
             ctx.textAlign = "center";
-            ctx.fillText("Press Enter/E to teleport", hintX, hintY);
+            ctx.fillText(`Press ${bindingHints.confirm || "Confirm"} to teleport`, hintX, hintY);
             ctx.restore();
         }
 
@@ -543,6 +662,12 @@
 
         const powerUpKeys = Object.keys(player.powerUps);
         const worldLabel = !campaign.inBossStage && level?.worldName ? `${level.worldName} ${level.worldTier}` : null;
+        const controlLines = [
+            `Move: ${bindingHints.moveLeft || "Left"} / ${bindingHints.moveRight || "Right"}`,
+            `Jump: ${bindingHints.jump || "Jump"}  Dash: ${bindingHints.dash || "Dash"}  Down+Dash: diagonal`,
+            `Attack: ${bindingHints.attack || "Attack"}  Swap: ${bindingHints.swapAttack || "Swap"}`,
+            `Teleport: ${bindingHints.confirm || "Confirm"}  Restart: ${bindingHints.restart || "Restart"}  Esc: controls`
+        ];
         const hudStats = [
             { label: "Health", value: `${player.health} / ${player.maxHealth}`, color: "#FF8C8C" },
             { label: "Dash", value: `${player.dashCharges}`, color: "#6EE7FF" },
@@ -558,7 +683,7 @@
             hudStats.splice(1, 0, { label: "Checkpoint", value: "Active", color: "#FFF2A8" });
         }
 
-        const hudHeight = 222 + (worldLabel ? 28 : 0) + Math.max(0, powerUpKeys.length) * 24;
+        const hudHeight = 162 + controlLines.length * 18 + hudStats.length * 26 + (worldLabel ? 28 : 0) + Math.max(0, powerUpKeys.length) * 24;
         const hudX = 16;
         const hudY = 16;
         const hudW = 336;
@@ -590,10 +715,11 @@
         ctx.shadowBlur = 0;
         ctx.fillStyle = "rgba(220, 235, 255, 0.72)";
         ctx.font = "13px Arial";
-        ctx.fillText("Arrows move/jump  •  Space dash  •  X attack", 28, 60);
-        ctx.fillText("C swap attack  •  Enter / E teleport", 28, 80);
+        for (let i = 0; i < controlLines.length; i++) {
+            ctx.fillText(controlLines[i], 28, 60 + i * 18);
+        }
 
-        let infoY = 108;
+        let infoY = 60 + controlLines.length * 18 + 16;
         if (worldLabel) {
             ctx.fillStyle = "#FFE7A3";
             ctx.font = "bold 15px Arial";
@@ -643,6 +769,48 @@
             ctx.textAlign = "left";
         }
 
+        if (settingsOpen) {
+            const panelW = Math.min(560, canvas.width * 0.76);
+            const panelH = 280;
+            const panelX = (canvas.width - panelW) / 2;
+            const panelY = (canvas.height - panelH) / 2;
+            const resetButton = { x: panelX + 28, y: panelY + panelH - 68, w: 180, h: 40 };
+            const closeButton = { x: panelX + panelW - 148, y: panelY + panelH - 68, w: 120, h: 40 };
+            window.GameRenderer.lastLayout.settingsResetButton = resetButton;
+            window.GameRenderer.lastLayout.settingsCloseButton = closeButton;
+
+            ctx.fillStyle = "rgba(0, 0, 0, 0.72)";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = "rgba(12, 16, 24, 0.94)";
+            ctx.fillRect(panelX, panelY, panelW, panelH);
+            ctx.strokeStyle = "rgba(255,255,255,0.16)";
+            ctx.strokeRect(panelX, panelY, panelW, panelH);
+
+            ctx.fillStyle = "#FFFFFF";
+            ctx.textBaseline = "middle";
+            ctx.font = "bold 28px Arial";
+            ctx.textAlign = "center";
+            ctx.fillText("Controls & Help", panelX + panelW / 2, panelY + 40);
+            ctx.font = "16px Arial";
+            ctx.fillText(`Move ${bindingHints.moveLeft || "Left"} / ${bindingHints.moveRight || "Right"}, jump ${bindingHints.jump || "Jump"}, dash ${bindingHints.dash || "Dash"}.`, panelX + panelW / 2, panelY + 86);
+            ctx.fillText(`Attack ${bindingHints.attack || "Attack"}, swap ${bindingHints.swapAttack || "Swap"}, teleport ${bindingHints.confirm || "Confirm"}.`, panelX + panelW / 2, panelY + 114);
+            ctx.fillText(`Restart uses ${bindingHints.restart || "Restart"}.`, panelX + panelW / 2, panelY + 142);
+            ctx.fillText("Use this panel to recover from bad remaps.", panelX + panelW / 2, panelY + 170);
+
+            ctx.fillStyle = "#FFB86C";
+            ctx.fillRect(resetButton.x, resetButton.y, resetButton.w, resetButton.h);
+            ctx.fillStyle = "#111111";
+            ctx.font = "bold 15px Arial";
+            ctx.fillText("Reset Controls", resetButton.x + resetButton.w / 2, resetButton.y + resetButton.h / 2);
+
+            ctx.fillStyle = "#D7DCE2";
+            ctx.fillRect(closeButton.x, closeButton.y, closeButton.w, closeButton.h);
+            ctx.fillStyle = "#111111";
+            ctx.fillText("Close", closeButton.x + closeButton.w / 2, closeButton.y + closeButton.h / 2);
+            ctx.textAlign = "left";
+            ctx.textBaseline = "alphabetic";
+        }
+
         const vignette = ctx.createRadialGradient(
             canvas.width * 0.5,
             canvas.height * 0.42,
@@ -667,7 +835,7 @@
 
             ctx.fillStyle = "#FFFFFF";
             ctx.font = "24px Arial";
-            ctx.fillText("Press SPACE to generate a new level!", canvas.width / 2, canvas.height / 2 + 40);
+            ctx.fillText(`Press ${bindingHints.restart || "Restart"} to generate a new level!`, canvas.width / 2, canvas.height / 2 + 40);
 
             ctx.textAlign = "left";
         } else if (gameState === "victory") {
@@ -680,8 +848,50 @@
             ctx.fillStyle = "#FFFFFF";
             ctx.font = "24px Arial";
             ctx.fillText(`Defeated ${getBossDisplayName(campaign.bossType)}`, canvas.width / 2, canvas.height / 2 + 18);
-            ctx.fillText("Press SPACE to start a new run", canvas.width / 2, canvas.height / 2 + 58);
+            ctx.fillText(`Press ${bindingHints.restart || "Restart"} to start a new run`, canvas.width / 2, canvas.height / 2 + 58);
             ctx.textAlign = "left";
+        }
+
+        if (settingsOpen && gameState !== "playing") {
+            const panelW = Math.min(560, canvas.width * 0.76);
+            const panelH = 280;
+            const panelX = (canvas.width - panelW) / 2;
+            const panelY = (canvas.height - panelH) / 2;
+            const resetButton = { x: panelX + 28, y: panelY + panelH - 68, w: 180, h: 40 };
+            const closeButton = { x: panelX + panelW - 148, y: panelY + panelH - 68, w: 120, h: 40 };
+            window.GameRenderer.lastLayout.settingsResetButton = resetButton;
+            window.GameRenderer.lastLayout.settingsCloseButton = closeButton;
+
+            ctx.fillStyle = "rgba(0, 0, 0, 0.72)";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = "rgba(12, 16, 24, 0.94)";
+            ctx.fillRect(panelX, panelY, panelW, panelH);
+            ctx.strokeStyle = "rgba(255,255,255,0.16)";
+            ctx.strokeRect(panelX, panelY, panelW, panelH);
+
+            ctx.fillStyle = "#FFFFFF";
+            ctx.textBaseline = "middle";
+            ctx.font = "bold 28px Arial";
+            ctx.textAlign = "center";
+            ctx.fillText("Controls & Help", panelX + panelW / 2, panelY + 40);
+            ctx.font = "16px Arial";
+            ctx.fillText(`Move ${bindingHints.moveLeft || "Left"} / ${bindingHints.moveRight || "Right"}, jump ${bindingHints.jump || "Jump"}, dash ${bindingHints.dash || "Dash"}.`, panelX + panelW / 2, panelY + 86);
+            ctx.fillText(`Attack ${bindingHints.attack || "Attack"}, swap ${bindingHints.swapAttack || "Swap"}, teleport ${bindingHints.confirm || "Confirm"}.`, panelX + panelW / 2, panelY + 114);
+            ctx.fillText(`Restart uses ${bindingHints.restart || "Restart"}.`, panelX + panelW / 2, panelY + 142);
+            ctx.fillText("Use this panel to recover from bad remaps.", panelX + panelW / 2, panelY + 170);
+
+            ctx.fillStyle = "#FFB86C";
+            ctx.fillRect(resetButton.x, resetButton.y, resetButton.w, resetButton.h);
+            ctx.fillStyle = "#111111";
+            ctx.font = "bold 15px Arial";
+            ctx.fillText("Reset Controls", resetButton.x + resetButton.w / 2, resetButton.y + resetButton.h / 2);
+
+            ctx.fillStyle = "#D7DCE2";
+            ctx.fillRect(closeButton.x, closeButton.y, closeButton.w, closeButton.h);
+            ctx.fillStyle = "#111111";
+            ctx.fillText("Close", closeButton.x + closeButton.w / 2, closeButton.y + closeButton.h / 2);
+            ctx.textAlign = "left";
+            ctx.textBaseline = "alphabetic";
         }
     }
 
@@ -692,6 +902,10 @@
         getPowerUpLabel,
         getAttackColor,
         getAttackLabel,
-        getBossDisplayName
+        getBossDisplayName,
+        lastLayout: {
+            settingsResetButton: null,
+            settingsCloseButton: null
+        }
     };
 })();

@@ -106,6 +106,7 @@ window.onload = function () {
     let teleporterHint = null;
     let portalParticles = [];
     let environmentParticles = [];
+    let collectedPowerUpIds = new Set();
     let checkpoint = null;
     let lives = 3;
     let gameState = "playing"; // "playing" | "game_over" | "victory"
@@ -123,9 +124,103 @@ window.onload = function () {
     };
 
     const keys = {};
+    const defaultBindings = {
+        moveLeft: ["ArrowLeft", "a", "A"],
+        moveRight: ["ArrowRight", "d", "D"],
+        jump: ["ArrowUp", "w", "W"],
+        dash: ["Space"],
+        attack: ["KeyX", "x", "X"],
+        swapAttack: ["KeyC", "c", "C"],
+        confirm: ["Enter", "KeyE", "e", "E"],
+        restart: ["KeyR", "r", "R"]
+    };
+
+    function cloneBindingsMap(source = defaultBindings) {
+        const clone = {};
+        for (const action of Object.keys(defaultBindings)) {
+            const bindings = source[action] || defaultBindings[action] || [];
+            clone[action] = [...new Set(bindings.filter((value) => typeof value === "string" && value.length > 0))];
+        }
+        return clone;
+    }
+
+    function normalizeBindingsMap(rawBindings) {
+        if (!rawBindings || typeof rawBindings !== "object") return cloneBindingsMap();
+
+        const normalized = cloneBindingsMap();
+        for (const action of Object.keys(defaultBindings)) {
+            const source = rawBindings[action];
+            if (!Array.isArray(source)) continue;
+            const cleaned = source.filter((value) => typeof value === "string" && value.length > 0);
+            if (cleaned.length > 0) normalized[action] = [...new Set(cleaned)];
+        }
+        return normalized;
+    }
+
+    function getBindingsFor(action) {
+        return controlBindings[action] || defaultBindings[action] || [];
+    }
+
+    function prettyBindingName(binding) {
+        if (binding === " ") return "Space";
+        if (binding === "Space") return "Space";
+        if (binding.startsWith("Arrow")) return binding.replace("Arrow", "");
+        if (binding.startsWith("Key") && binding.length === 4) return binding.slice(3);
+        return binding;
+    }
+
+    function formatBindingList(action) {
+        return getBindingsFor(action).map(prettyBindingName).join(" / ");
+    }
+
+    function actionMatchesEvent(action, e) {
+        const bindings = getBindingsFor(action);
+        return bindings.includes(e.key) || bindings.includes(e.code);
+    }
+
+    function isActionPressed(action) {
+        return getBindingsFor(action).some((binding) => keys[binding]);
+    }
+
+    function clearActionState(action) {
+        for (const key of getBindingsFor(action)) keys[key] = false;
+    }
+    function loadControlBindings() {
+        try {
+            const saved = JSON.parse(localStorage.getItem("platformerBindings") || "null");
+            return normalizeBindingsMap(saved);
+        } catch {
+            return cloneBindingsMap();
+        }
+    }
+
+    let controlBindings = loadControlBindings();
+    let settingsOpen = false;
+    let levelInstanceId = 0;
+
+    window.setPlatformerBindings = function (nextBindings) {
+        if (!nextBindings || typeof nextBindings !== "object") return;
+        controlBindings = normalizeBindingsMap(nextBindings);
+        try {
+            localStorage.setItem("platformerBindings", JSON.stringify(controlBindings));
+        } catch {
+            // Ignore storage failures and keep the live bindings active.
+        }
+    };
+
+    window.resetPlatformerBindings = function () {
+        controlBindings = cloneBindingsMap();
+        try {
+            localStorage.removeItem("platformerBindings");
+        } catch {
+            // Ignore storage failures; the in-memory reset still succeeds.
+        }
+    };
 
     function isPlatformSolid(platform) {
         if (platform.isBackground) return false;
+        if (platform.collisionMode === "disabled") return false;
+        if (platform.isHiddenScenery) return false;
         if (platform.type === "crumble" && platform.crumbleState === "hidden") return false;
         if (platform.type === "phase" && platform.phaseState === "hidden") return false;
         if (platform.type === "spike") return false; // Physics pass-through natively so death handler triggers explicitly
@@ -146,6 +241,7 @@ window.onload = function () {
             const runtime = {
                 ...platform,
                 id: index,
+                sourceId: `${level.instanceId}:${platform.id}`,
                 crumbleDelay: platform.crumbleDuration || (platform.type === "crumble" ? 500 : 0),
                 crumbleResetDelay: platform.type === "crumble" ? 2400 : 0,
                 crumbleState: platform.type === "crumble" ? "idle" : "stable",
@@ -161,6 +257,11 @@ window.onload = function () {
                 runtime.sawX = platform.sawX ?? runtime.w * 0.5;
                 runtime.sawSpeed = platform.sawSpeed ?? 60;
                 runtime.sawSize = platform.sawSize ?? 15;
+            }
+
+            if (collectedPowerUpIds.has(`${level.instanceId}:${platform.id}`)) {
+                runtime.hasPowerUp = false;
+                runtime.powerUpType = null;
             }
 
             return runtime;
@@ -196,7 +297,7 @@ window.onload = function () {
 
     function initLevel(options = {}) {
         const preserveAttacks = !!options.preserveAttacks;
-        level = buildCampaignLevel();
+        level = { ...buildCampaignLevel(), instanceId: ++levelInstanceId };
         player.x = level.startPos.x;
         player.y = level.startPos.y;
         player.vx = 0;
@@ -216,6 +317,7 @@ window.onload = function () {
         player.checkpointId = null;
         player.pickupRadius = 0;
         player.supportPlatformId = null;
+        collectedPowerUpIds = new Set();
         teleporterHint = null;
         if (preserveAttacks) resetAttackStatePreservingLoadout();
         else resetAttackLoadout();
@@ -292,7 +394,7 @@ window.onload = function () {
         teleporterHint = null;
         camera.x = player.x;
         camera.y = player.y;
-        resetAttackStatePreservingLoadout();
+        resetAttackLoadout();
         resetLevelState();
     }
 
@@ -388,17 +490,14 @@ window.onload = function () {
     }
 
     function consumeConfirmKey() {
-        keys["Enter"] = false;
-        keys["KeyE"] = false;
-        keys["e"] = false;
-        keys["E"] = false;
+        clearActionState("confirm");
     }
 
     function handleTeleporters(now) {
         teleporterHint = null;
         if (now - player.lastTeleportAt < 180) return;
 
-        const wantsConfirm = !!(keys["Enter"] || keys["KeyE"]);
+        const wantsConfirm = isActionPressed("confirm");
         for (const teleporter of teleporters) {
             if (teleporter.cooldownUntil > now) continue;
             if (!rectIntersectsCircle(player, teleporter.entry)) continue;
@@ -430,25 +529,8 @@ window.onload = function () {
     }
 
     function updateCamera(dt) {
-        const anchors = level?.anchors || [];
-        let roomCenterX = player.x + player.w * 0.5;
-        let roomCenterY = player.y + player.h * 0.5;
-        let lockX = false;
-
-        for (let i = 0; i < anchors.length - 1; i++) {
-            const left = anchors[i];
-            const right = anchors[i + 1];
-            if (player.x + player.w * 0.5 < left.x) continue;
-            if (player.x + player.w * 0.5 > right.x + right.w) continue;
-            roomCenterX = (left.x + right.x + right.w) * 0.5;
-            roomCenterY = (left.y + right.y) * 0.5;
-            lockX = Math.abs(right.y - left.y) > 170;
-            break;
-        }
-
-        const lookAhead = player.facing * (90 + Math.min(70, Math.abs(player.vx) * 10));
-        const targetCamX = (lockX ? roomCenterX : player.x + player.w * 0.5 + lookAhead) - canvas.width / 2;
-        const targetCamY = roomCenterY - Math.max(0, canvas.height / 2 - 120);
+        const targetCamX = player.x + player.w * 0.5 - canvas.width / 2;
+        const targetCamY = player.y + player.h * 0.5 - canvas.height / 2;
         const lerpFactor = player.state === "dash" ? 9.5 : 4.5;
 
         camera.x += (targetCamX - camera.x) * dt * lerpFactor;
@@ -607,6 +689,16 @@ window.onload = function () {
             speed: 12,
             size: 22,
             life: 760
+        },
+        reboundDisk: {
+            label: "Rebound Disk",
+            color: "#8AE6FF",
+            cooldown: 760,
+            damage: 1,
+            speed: 11.5,
+            size: 18,
+            life: 1500,
+            rebounds: 4
         }
     };
 
@@ -728,8 +820,51 @@ window.onload = function () {
             bornAt: now,
             expiresAt: now + def.life,
             pierce: def.pierce || 0,
+            rebounds: def.rebounds || 0,
             hitIds: new Set()
         });
+    }
+
+    function isPhaseStepActive(now) {
+        return !!(player.powerUps["phaseStep"] && player.state === "dash" && player.dashTime <= 90 && now - player.lastDashTime <= 120);
+    }
+
+    function bounceProjectileOffPlatforms(projectile, prevX, prevY) {
+        let hitVertical = false;
+        let hitHorizontal = false;
+
+        for (const platform of platforms) {
+            if (!isPlatformSolid(platform)) continue;
+            if (
+                projectile.x >= platform.x + platform.w ||
+                projectile.x + projectile.w <= platform.x ||
+                projectile.y >= platform.y + platform.h ||
+                projectile.y + projectile.h <= platform.y
+            ) {
+                continue;
+            }
+
+            const overlappedFromLeft = prevX + projectile.w <= platform.x;
+            const overlappedFromRight = prevX >= platform.x + platform.w;
+            const overlappedFromTop = prevY + projectile.h <= platform.y;
+            const overlappedFromBottom = prevY >= platform.y + platform.h;
+
+            if (overlappedFromLeft || overlappedFromRight) hitVertical = true;
+            if (overlappedFromTop || overlappedFromBottom) hitHorizontal = true;
+            if (!hitVertical && !hitHorizontal) hitVertical = true;
+
+            if (projectile.rebounds > 0) {
+                if (hitVertical) projectile.vx *= -1;
+                if (hitHorizontal) projectile.vy *= -1;
+                projectile.rotation += Math.PI * 0.35;
+                projectile.rebounds--;
+                projectile.x = prevX;
+                projectile.y = prevY;
+            } else {
+                projectile.expiresAt = 0;
+            }
+            return;
+        }
     }
 
     function triggerAttack(now) {
@@ -743,7 +878,7 @@ window.onload = function () {
         if (type === "slash") createSlashAttack(now);
         else if (type === "chakram") createChakramAttack(now);
         else if (type === "burst" || type === "thornBurst") createBurstAttack(now, type);
-        else if (type === "sandShuriken" || type === "iceNeedle" || type === "forgeShot") createProjectileAttack(now, type);
+        else if (type === "sandShuriken" || type === "iceNeedle" || type === "forgeShot" || type === "reboundDisk") createProjectileAttack(now, type);
     }
 
     function attackHitsEnemy(attack, enemy) {
@@ -807,9 +942,14 @@ window.onload = function () {
 
         attackProjectiles = attackProjectiles.filter((projectile) => projectile.expiresAt > now);
         for (const projectile of attackProjectiles) {
+            const prevX = projectile.x;
+            const prevY = projectile.y;
             projectile.x += projectile.vx * dt * 60;
             projectile.y += projectile.vy * dt * 60;
             projectile.rotation += dt * 14;
+            if (projectile.type === "reboundDisk") {
+                bounceProjectileOffPlatforms(projectile, prevX, prevY);
+            }
         }
 
         for (const attack of activeAttacks) {
@@ -848,22 +988,31 @@ window.onload = function () {
         }));
     }
 
-    function applyEnemyHit(now) {
-        if (player.enemyInvulnerableUntil && now < player.enemyInvulnerableUntil) return false;
+    function applyPlayerDamage(now, damage = 1, options = {}) {
+        const lethal = !!options.lethal;
+        const knockback = options.knockback !== false;
 
-        player.enemyInvulnerableUntil = now + 900;
-        player.health = Math.max(0, player.health - 1);
+        if (!lethal && player.enemyInvulnerableUntil && now < player.enemyInvulnerableUntil) return false;
 
-        if (player.health <= 0) {
+        if (!lethal) player.enemyInvulnerableUntil = now + 900;
+        player.health = Math.max(0, player.health - damage);
+
+        if (lethal || player.health <= 0) {
             player.health = player.maxHealth;
             die();
             return true;
         }
 
-        player.vx = -player.facing * Math.max(6, player.maxSpeed);
-        player.vy = Math.min(player.vy, -6);
-        player.state = "air";
+        if (knockback) {
+            player.vx = -player.facing * Math.max(6, player.maxSpeed);
+            player.vy = Math.min(player.vy, -6);
+            player.state = "air";
+        }
         return true;
+    }
+
+    function applyEnemyHit(now) {
+        return applyPlayerDamage(now, 1, { knockback: true });
     }
 
     // INPUT
@@ -871,21 +1020,32 @@ window.onload = function () {
         keys[e.key] = true;
         keys[e.code] = true;
 
-        if (e.key === "ArrowUp") player.lastJumpPress = Date.now();
+        if (e.code === "Escape") {
+            settingsOpen = !settingsOpen;
+            e.preventDefault();
+            return;
+        }
 
-        if (e.code === "Space") {
+        if (settingsOpen) {
+            e.preventDefault();
+            return;
+        }
+
+        if (actionMatchesEvent("jump", e)) player.lastJumpPress = Date.now();
+
+        if (actionMatchesEvent("dash", e)) {
             if (gameState === "playing") player.dashRequested = true;
         }
 
-        if (!e.repeat && e.code === "KeyX" && gameState === "playing") {
+        if (!e.repeat && actionMatchesEvent("attack", e) && gameState === "playing") {
             player.attackRequested = true;
         }
 
-        if (!e.repeat && e.code === "KeyC" && gameState === "playing") {
+        if (!e.repeat && actionMatchesEvent("swapAttack", e) && gameState === "playing") {
             cycleAttack();
         }
 
-        if ((e.key && e.key.startsWith("Arrow")) || e.code === "Space" || e.code === "KeyX" || e.code === "KeyC") {
+        if ((e.key && e.key.startsWith("Arrow")) || actionMatchesEvent("dash", e) || actionMatchesEvent("attack", e) || actionMatchesEvent("swapAttack", e) || actionMatchesEvent("confirm", e) || actionMatchesEvent("restart", e)) {
             e.preventDefault();
         }
     });
@@ -894,12 +1054,32 @@ window.onload = function () {
         keys[e.key] = false;
         keys[e.code] = false;
 
-        if (e.code === "Space") {
+        if (actionMatchesEvent("dash", e)) {
             player.dashRequested = false;
         }
 
-        if ((e.key && e.key.startsWith("Arrow")) || e.code === "Space" || e.code === "KeyX" || e.code === "KeyC") {
+        if ((e.key && e.key.startsWith("Arrow")) || actionMatchesEvent("dash", e) || actionMatchesEvent("attack", e) || actionMatchesEvent("swapAttack", e) || actionMatchesEvent("confirm", e) || actionMatchesEvent("restart", e)) {
             e.preventDefault();
+        }
+    });
+
+    canvas.addEventListener("mousedown", (e) => {
+        if (!settingsOpen || !window.GameRenderer?.lastLayout?.settingsResetButton) return;
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+        const x = (e.clientX - rect.left) * scaleX;
+        const y = (e.clientY - rect.top) * scaleY;
+        const reset = window.GameRenderer.lastLayout.settingsResetButton;
+        const close = window.GameRenderer.lastLayout.settingsCloseButton;
+        const hit = (box) => x >= box.x && x <= box.x + box.w && y >= box.y && y <= box.y + box.h;
+
+        if (hit(reset)) {
+            window.resetPlatformerBindings();
+            return;
+        }
+        if (hit(close)) {
+            settingsOpen = false;
         }
     });
 
@@ -912,13 +1092,17 @@ window.onload = function () {
             player.dashTime = 0;
             player.dashActiveDuration = player.dashDuration;
             player.dashActiveSpeed = player.dashSpeed;
+            player.onGround = false;
 
-            // Determine dash direction from held keys, but never allow downward dashes.
+            // Determine dash direction from held keys, allowing diagonals except straight down.
             let dx = 0;
             let dy = 0;
-            if (keys["ArrowLeft"]) dx -= 1;
-            if (keys["ArrowRight"]) dx += 1;
-            if (keys["ArrowUp"] || keys["w"] || keys["W"]) dy = -1;
+            if (isActionPressed("moveLeft")) dx -= 1;
+            if (isActionPressed("moveRight")) dx += 1;
+            if (isActionPressed("jump") && !isActionPressed("dash")) dy -= 1;
+            if (keys["ArrowDown"] || keys["KeyS"] || keys["s"] || keys["S"]) dy += 1;
+
+            if (dx === 0 && dy > 0) dy = 0;
 
             // If no direction is held, dash horizontally in the facing direction.
             if (dx === 0 && dy === 0) {
@@ -944,11 +1128,14 @@ window.onload = function () {
     }
 
     function update(dt) {
+        if (settingsOpen) {
+            return;
+        }
+
         if (gameState === "game_over" || gameState === "victory") {
-            if (keys["Enter"] || keys[" "]) {
+            if (isActionPressed("restart")) {
                 resetGame();
-                keys["Enter"] = false; // Prevent immediate rebinding
-                keys[" "] = false;
+                clearActionState("restart");
             }
             return;
         }
@@ -1019,8 +1206,8 @@ window.onload = function () {
         }
 
         let inputX = 0;
-        if (keys["ArrowLeft"]) inputX -= 1;
-        if (keys["ArrowRight"]) inputX += 1;
+        if (isActionPressed("moveLeft")) inputX -= 1;
+        if (isActionPressed("moveRight")) inputX += 1;
 
         const scale = Math.min(1, (dt || 0.016) * 60);
         const effectiveAccel = player.accel * (player.onGround ? 1 : player.airControl);
@@ -1048,22 +1235,26 @@ window.onload = function () {
             return; // Halt update frame
         }
 
+        const phaseStepActive = isPhaseStepActive(now);
+
         let touchingSpike = false;
-        for (let p of platforms) {
-            if (p.type === "spike") {
-                if (
-                    player.x < p.x + p.w &&
-                    player.x + player.w > p.x &&
-                    player.y < p.y + p.h &&
-                    player.y + player.h > p.y
-                ) {
-                    touchingSpike = true;
-                    break;
+        if (!phaseStepActive) {
+            for (let p of platforms) {
+                if (p.type === "spike") {
+                    if (
+                        player.x < p.x + p.w &&
+                        player.x + player.w > p.x &&
+                        player.y < p.y + p.h &&
+                        player.y + player.h > p.y
+                    ) {
+                        touchingSpike = true;
+                        break;
+                    }
                 }
             }
         }
         if (touchingSpike) {
-            die();
+            applyPlayerDamage(now, player.maxHealth, { lethal: true, knockback: false });
             return; // Halt update frame
         }
 
@@ -1074,8 +1265,9 @@ window.onload = function () {
             player.vx = player.dashDirX * player.dashActiveSpeed;
             player.vy = player.dashDirY * player.dashActiveSpeed;
 
-            player.x += player.vx;
-            player.y += player.vy;
+            const dashStep = dt * 60;
+            player.x += player.vx * dashStep;
+            player.y += player.vy * dashStep;
 
             // Generate trail ghost particle
             player.trail.push({ 
@@ -1122,7 +1314,7 @@ window.onload = function () {
             updateAttacks(dt, now);
 
             if (typeof window.checkEnemyCollisions === "function") {
-                if (window.checkEnemyCollisions(enemies, player, now)) {
+                if (!phaseStepActive && window.checkEnemyCollisions(enemies, player, now)) {
                     applyEnemyHit(now);
                     return;
                 }
@@ -1165,9 +1357,8 @@ window.onload = function () {
 
         // ===== JUMP =====
         const jumpPressedRecently =
-            (player.lastJumpPress && now - player.lastJumpPress <= player.jumpBufferTime)
-            || keys["ArrowUp"];
-        const jumpHeld = !!keys["ArrowUp"];
+            player.lastJumpPress && now - player.lastJumpPress <= player.jumpBufferTime;
+        const jumpHeld = isActionPressed("jump");
 
         if (
             jumpPressedRecently &&
@@ -1269,8 +1460,8 @@ window.onload = function () {
                 const py = player.y + player.h / 2;
                 const dist = Math.sqrt((sawWorldX - px) ** 2 + (sawWorldY - py) ** 2);
                 
-                if (dist < p.sawSize + Math.min(player.w, player.h) / 2) {
-                    die();
+                if (!phaseStepActive && dist < p.sawSize + Math.min(player.w, player.h) / 2) {
+                    applyPlayerDamage(now, player.maxHealth, { lethal: true, knockback: false });
                     return; // Halt update frame
                 }
             }
@@ -1294,6 +1485,7 @@ window.onload = function () {
                     player.y + player.h > boxY - pad
                 ) {
                     player.powerUps[p.powerUpType] = Date.now() + 10000;
+                    if (p.sourceId != null) collectedPowerUpIds.add(p.sourceId);
                     p.hasPowerUp = false; 
                     if (p.powerUpType === 'doubleDash') player.dashCharges = player.maxDashCharges; // immediately give them
                 }
@@ -1332,7 +1524,7 @@ window.onload = function () {
         updateAttacks(dt, now);
 
         if (typeof window.checkEnemyCollisions === "function") {
-            if (window.checkEnemyCollisions(enemies, player, now)) {
+            if (!phaseStepActive && window.checkEnemyCollisions(enemies, player, now)) {
                 applyEnemyHit(now);
                 return;
             }
@@ -1377,6 +1569,17 @@ window.onload = function () {
             activeAttacks,
             attackProjectiles,
             currentAttackType: getCurrentAttackType(),
+            bindingHints: {
+                moveLeft: formatBindingList("moveLeft"),
+                moveRight: formatBindingList("moveRight"),
+                jump: formatBindingList("jump"),
+                dash: formatBindingList("dash"),
+                attack: formatBindingList("attack"),
+                swapAttack: formatBindingList("swapAttack"),
+                confirm: formatBindingList("confirm"),
+                restart: formatBindingList("restart")
+            },
+            settingsOpen,
             now: Date.now()
         });
     }

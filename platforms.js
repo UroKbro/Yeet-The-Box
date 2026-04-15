@@ -23,8 +23,8 @@ function createLevelGenerator() {
         background: "rgba(188, 129, 84, 0.16)"
       },
       sky: { top: "#1B1210", bottom: "#8E5B38", haze: "rgba(255, 200, 132, 0.08)" },
-      powerUps: ["highJump", "superSpeed", "doubleDash", "overcharge", "sandSkimmer"],
-      attackPickups: ["chakram", "sandShuriken"],
+      powerUps: ["highJump", "superSpeed", "doubleDash", "overcharge", "sandSkimmer", "phaseStep"],
+      attackPickups: ["chakram", "sandShuriken", "reboundDisk"],
       enemies: ["pacingStalker", "sentinel", "gapGuard", "sandrunner"],
       rewardBias: 0.02,
       enemyBias: 0.03,
@@ -44,7 +44,7 @@ function createLevelGenerator() {
         background: "rgba(137, 180, 210, 0.16)"
       },
       sky: { top: "#0B1625", bottom: "#4E7196", haze: "rgba(203, 235, 255, 0.08)" },
-      powerUps: ["icePhysics", "feather", "doubleDash", "antiGravity", "glacierGrip"],
+      powerUps: ["icePhysics", "feather", "doubleDash", "antiGravity", "glacierGrip", "phaseStep"],
       attackPickups: ["burst", "iceNeedle"],
       enemies: ["hoverer", "razorbat", "gapGuard", "iceWisp"],
       rewardBias: 0.03,
@@ -86,8 +86,8 @@ function createLevelGenerator() {
         background: "rgba(99, 102, 109, 0.16)"
       },
       sky: { top: "#171923", bottom: "#4E3B3C", haze: "rgba(242, 170, 130, 0.08)" },
-      powerUps: ["overcharge", "giantBox", "doubleDash", "superSpeed", "forgeRunner"],
-      attackPickups: ["burst", "forgeShot"],
+      powerUps: ["overcharge", "giantBox", "doubleDash", "superSpeed", "forgeRunner", "phaseStep"],
+      attackPickups: ["burst", "forgeShot", "reboundDisk"],
       enemies: ["sentinel", "gapGuard", "razorbat", "drillDrone"],
       rewardBias: -0.01,
       enemyBias: 0.05,
@@ -868,12 +868,19 @@ function createLevelGenerator() {
     const allowedEnemies = new Set(profile.allowedEnemies || []);
     const density = profile.enemyDensity || 1;
     const tierBoost = Math.max(0, profile.worldTier - 1);
-    const hardCandidates = platforms.filter((p) => p.pathType === "hard" && p.edgeType === "dash_gate" && p.w >= 110 && !p.hasPowerUp && !p.hasSawblade);
-    const stalkerCandidates = platforms.filter((p) => p.pathType === "easy" && p.role === "path" && p.w >= 190 && !p.hasPowerUp && !p.hasSawblade && !p.enemySpawn);
-    const sentinelCandidates = platforms.filter((p) => p.pathType === "hard" && p.role === "path" && p.w >= 150 && !p.hasPowerUp && !p.hasSawblade && !p.enemySpawn);
-    const razorbatCandidates = platforms.filter((p) =>
+    const isSpawnableSurface = (p) =>
+      p &&
       !p.isBackground &&
       !p.isHiddenScenery &&
+      p.collisionMode !== "disabled" &&
+      p.phaseState !== "hidden" &&
+      p.crumbleState !== "hidden";
+
+    const hardCandidates = platforms.filter((p) => isSpawnableSurface(p) && p.pathType === "hard" && p.edgeType === "dash_gate" && p.w >= 110 && !p.hasPowerUp && !p.hasSawblade);
+    const stalkerCandidates = platforms.filter((p) => isSpawnableSurface(p) && p.pathType === "easy" && p.role === "path" && p.w >= 190 && !p.hasPowerUp && !p.hasSawblade && !p.enemySpawn);
+    const sentinelCandidates = platforms.filter((p) => isSpawnableSurface(p) && p.pathType === "hard" && p.role === "path" && p.w >= 150 && !p.hasPowerUp && !p.hasSawblade && !p.enemySpawn);
+    const razorbatCandidates = platforms.filter((p) =>
+      isSpawnableSurface(p) &&
       !p.enemySpawn &&
       !p.hasSawblade &&
       !p.hasPowerUp &&
@@ -959,7 +966,7 @@ function createLevelGenerator() {
 
     if (allowedEnemies.has("vineCrawler")) {
       for (const p of platforms) {
-        if (p.pathType !== "branch" || p.role !== "path" || p.enemySpawn || p.hasPowerUp || p.w < 130) continue;
+        if (!isSpawnableSurface(p) || p.pathType !== "branch" || (p.role !== "path" && p.role !== "branch") || p.enemySpawn || p.hasPowerUp || p.w < 130) continue;
         if (!chance((0.18 + profile.enemyChance * 0.22) * density)) continue;
         p.enemySpawn = { type: "vineCrawler", speed: 120 + ri(0, 22) + tierBoost * 12, aggroRange: 260 + tierBoost * 20 };
       }
@@ -1558,7 +1565,51 @@ function createLevelGenerator() {
     };
   }
 
+  function validateGeneratedLevel(level) {
+    const issues = [];
+    const platforms = level?.platforms || [];
+    const start = platforms.find((p) => p.type === "start") || null;
+    const goal = platforms.find((p) => p.type === "exit") || null;
+
+    if (!start || !goal) {
+      issues.push("missing start or exit platform");
+    } else if (!isReachable(start, goal, "standard_preferred")) {
+      issues.push("exit appears unreachable from the start");
+    }
+
+    if (goal) {
+      const flagZone = getExitFlagZone(goal);
+      for (const platform of platforms) {
+        if (platform.id === goal.id) continue;
+        if (platform.isBackground || platform.isHiddenScenery) continue;
+        if (platform.collisionMode === "disabled") continue;
+        if (rectsOverlap(getPlatformRect(platform), flagZone)) {
+          issues.push(`exit flag blocked by platform ${platform.id}`);
+          break;
+        }
+      }
+    }
+
+    for (const platform of platforms) {
+      if (platform.collisionMode !== "disabled") continue;
+      if (platform.isHiddenScenery) continue;
+      if (platform.hasPowerUp || platform.hasAttackPickup || platform.enemySpawn) {
+        issues.push(`disabled platform ${platform.id} still carries gameplay content`);
+      }
+    }
+
+    for (const platform of platforms) {
+      if (!platform.hasPowerUp && !platform.hasAttackPickup && !platform.enemySpawn) continue;
+      if (platform.isBackground || platform.isHiddenScenery) {
+        issues.push(`hidden platform ${platform.id} still carries gameplay content`);
+      }
+    }
+
+    return issues;
+  }
+
   generateLevel.generateBossLevel = generateBossLevel;
+  generateLevel.validateGeneratedLevel = validateGeneratedLevel;
   return generateLevel;
 }
 

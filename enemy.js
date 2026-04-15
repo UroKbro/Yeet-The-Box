@@ -290,6 +290,7 @@
       e.aggroRange = spawn.aggroRange ?? 280;
       e.patrolMinX = platform.x;
       e.patrolMaxX = platform.x + platform.w - e.w;
+      e.hoverPhase = randomSeedFromId(idx + 900) * Math.PI * 2;
       e.hp = 2;
       e.maxHp = 2;
       return e;
@@ -305,6 +306,7 @@
       e.speed = spawn.speed ?? 175;
       e.interceptLeadTime = spawn.interceptLeadTime ?? 0.3;
       e.aggroRange = spawn.aggroRange ?? 540;
+      e.hoverPhase = randomSeedFromId(idx + 950) * Math.PI * 2;
       e.hp = 1;
       e.maxHp = 1;
       return e;
@@ -321,6 +323,7 @@
       e.aggroRange = spawn.aggroRange ?? 260;
       e.patrolMinX = platform.x;
       e.patrolMaxX = platform.x + platform.w - e.w;
+      e.hoverPhase = randomSeedFromId(idx + 980) * Math.PI * 2;
       e.hp = 2;
       e.maxHp = 2;
       return e;
@@ -337,6 +340,7 @@
       e.aggroRange = spawn.aggroRange ?? 320;
       e.homeX = x;
       e.homeY = y;
+      e.hoverPhase = randomSeedFromId(idx + 1010) * Math.PI * 2;
       e.hp = 2;
       e.maxHp = 2;
       return e;
@@ -412,12 +416,14 @@
     return (n % 1000) / 1000;
   }
 
-  function createEnemies(level) {
+    function createEnemies(level) {
     const enemies = [];
     const plats = level?.platforms ?? [];
     let idx = 0;
     for (const p of plats) {
       if (!p || !p.enemySpawn) continue;
+      if (p.collisionMode === "disabled" || p.isHiddenScenery) continue;
+      if (p.phaseState === "hidden" || p.crumbleState === "hidden") continue;
       const spawn = p.enemySpawn;
       const list = Array.isArray(spawn) ? spawn : [spawn];
       for (const s of list) {
@@ -497,10 +503,13 @@
     const chase = Math.abs(dx) < (e.aggroRange || 280);
     const dir = chase ? Math.sign(dx || e.facing || 1) : e.facing;
     e.facing = dir;
-    const targetSpeed = (e.speed || 165) * (chase ? 1.35 : 0.85);
+    const surge = chase && Math.abs(dx) < 160;
+    const targetSpeed = (e.speed || 165) * (surge ? 1.9 : chase ? 1.35 : 0.85);
     e.vx = lerp(e.vx, dir * targetSpeed, Math.min(1, dt * 10));
     e.x = clamp(e.x + e.vx * dt, e.patrolMinX, e.patrolMaxX);
     if (e.x === e.patrolMinX || e.x === e.patrolMaxX) e.facing *= -1;
+    const bob = Math.sin(now / 120 + (e.hoverPhase || 0)) * (surge ? 3.5 : 1.8);
+    e.y = plat.y - e.h + bob;
   }
 
   function updateVineCrawler(e, player, platforms, dt, now) {
@@ -510,11 +519,13 @@
     const px = player.x + player.w * 0.5;
     const dx = px - (e.x + e.w * 0.5);
     const segment = Math.max(36, (plat.w - e.w) * 0.5);
-    const target = clamp((plat.x + plat.w * 0.5 - e.w * 0.5) + Math.sin(now / 320 + (e.hoverPhase || 0)) * segment, plat.x, plat.x + plat.w - e.w);
+    const stalkTarget = clamp((plat.x + plat.w * 0.5 - e.w * 0.5) + Math.sin(now / 260 + (e.hoverPhase || 0)) * segment, plat.x, plat.x + plat.w - e.w);
     const dir = dx >= 0 ? 1 : -1;
     e.facing = dir;
-    e.vx = lerp(e.vx, dir * (e.speed || 130), Math.min(1, dt * 6));
-    e.x = clamp(lerp(e.x, target, Math.min(1, dt * 2.5)), plat.x, plat.x + plat.w - e.w);
+    const close = Math.abs(dx) < 170;
+    e.vx = lerp(e.vx, dir * ((e.speed || 130) * (close ? 1.7 : 0.8)), Math.min(1, dt * 6));
+    e.x = clamp(lerp(e.x, close ? px - e.w * 0.5 : stalkTarget, Math.min(1, dt * (close ? 4.2 : 2.5))), plat.x, plat.x + plat.w - e.w);
+    e.y = plat.y - e.h + Math.sin(now / 220 + (e.hoverPhase || 0)) * (close ? 3 : 1.5);
   }
 
   function updateIceWisp(e, player, platforms, dt, now) {
@@ -524,10 +535,16 @@
     const dy = py - (e.y + e.h * 0.5);
     const len = Math.sqrt(dx * dx + dy * dy) || 1;
     const near = len < (e.aggroRange || 540);
-    const drift = near ? 1 : -1;
-    const speed = (e.speed || 175) * (near ? 1.2 : 0.6);
-    e.vx = lerp(e.vx, (dx / len) * speed, Math.min(1, dt * 4.5));
-    e.vy = lerp(e.vy, (dy / len) * speed * 0.75 + drift * 18, Math.min(1, dt * 4.5));
+    const orbitRadius = near ? 120 : 180;
+    const orbitAngle = now / 260 + (e.hoverPhase || 0);
+    const targetX = near ? px + Math.cos(orbitAngle) * orbitRadius : e.homeX + Math.cos(orbitAngle) * 70;
+    const targetY = near ? py + Math.sin(orbitAngle * 1.2) * 78 - 20 : e.homeY + Math.sin(orbitAngle * 0.9) * 24;
+    const tx = targetX - (e.x + e.w * 0.5);
+    const ty = targetY - (e.y + e.h * 0.5);
+    const targetLen = Math.sqrt(tx * tx + ty * ty) || 1;
+    const speed = (e.speed || 175) * (near ? 1.15 : 0.55);
+    e.vx = lerp(e.vx, (tx / targetLen) * speed, Math.min(1, dt * 4.5));
+    e.vy = lerp(e.vy, (ty / targetLen) * speed, Math.min(1, dt * 4.5));
     e.x += e.vx * dt;
     e.y += e.vy * dt;
   }
@@ -542,8 +559,16 @@
     const len = Math.sqrt(dx * dx + dy * dy) || 1;
     const near = len < (e.aggroRange || 320);
     e.facing = dx >= 0 ? 1 : -1;
-    e.vx = lerp(e.vx, ((near ? dx : e.facing * 1) / len) * (e.speed || 185), Math.min(1, dt * 5));
-    e.vy = lerp(e.vy, ((near ? dy : Math.sin(now / 240 + (e.hoverPhase || 0)) * 40) / len) * (e.speed || 185), Math.min(1, dt * 5));
+    const hoverX = floor.x + floor.w * 0.5 + Math.sin(now / 320 + (e.hoverPhase || 0)) * 130;
+    const hoverY = near ? py - 96 : floor.y - 112 + Math.sin(now / 240 + (e.hoverPhase || 0)) * 24;
+    const targetX = near ? px - e.w * 0.5 : hoverX;
+    const targetY = near ? hoverY : hoverY;
+    const tx = targetX - e.x;
+    const ty = targetY - e.y;
+    const targetLen = Math.sqrt(tx * tx + ty * ty) || 1;
+    const speed = (e.speed || 185) * (near ? 1.4 : 0.75);
+    e.vx = lerp(e.vx, (tx / targetLen) * speed, Math.min(1, dt * 5));
+    e.vy = lerp(e.vy, (ty / targetLen) * speed, Math.min(1, dt * 5));
     e.x = clamp(e.x + e.vx * dt, floor.x + 52, floor.x + floor.w - e.w - 52);
     e.y = clamp(e.y + e.vy * dt, floor.y - 180, floor.y - 54);
   }
