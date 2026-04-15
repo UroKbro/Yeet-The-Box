@@ -550,6 +550,7 @@ window.onload = function () {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
 
         for (let p of platforms) {
+            if (p.isHiddenScenery) continue;
             if (p.type === "crumble" && p.crumbleState === "hidden") continue;
 
             let drawX = p.x - camera.x;
