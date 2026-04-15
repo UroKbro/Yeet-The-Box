@@ -60,7 +60,13 @@ window.onload = function () {
         baseMaxFallSpeed: 10,
         
         powerUps: {},
-        trail: [] // Stores visual ghost frames
+        trail: [], // Stores visual ghost frames
+        facing: 1,
+        renderScaleX: 1,
+        renderScaleY: 1,
+        stretchVel: 0,
+        justLandedAt: 0,
+        lastTeleportAt: 0
     };
 
     let gravity = 0.475;
@@ -72,6 +78,10 @@ window.onload = function () {
 
     let level;
     let platforms;
+    let enemies = [];
+    let teleporters = [];
+    let portalParticles = [];
+    let environmentParticles = [];
     let lives = 3;
     let gameState = "playing"; // "playing" | "game_over"
 
@@ -102,6 +112,10 @@ window.onload = function () {
         player.dashCharges = player.maxDashCharges;
         player.dashRequested = false;
         player.trail = [];
+        player.renderScaleX = 1;
+        player.renderScaleY = 1;
+        player.stretchVel = 0;
+        player.lastTeleportAt = 0;
         
         platforms = level.platforms.map((platform, index) => ({
             ...platform,
@@ -112,6 +126,17 @@ window.onload = function () {
             crumbleTriggeredAt: 0,
             respawnAt: 0
         }));
+
+        // Enemies are created from per-platform spawn descriptors.
+        enemies = (typeof window.createEnemies === "function")
+          ? window.createEnemies({ ...level, platforms })
+          : [];
+        teleporters = (level.teleporters || []).map((teleporter) => ({
+            ...teleporter,
+            cooldownUntil: 0
+        }));
+        portalParticles = [];
+        environmentParticles = [];
 
         camera.x = player.x;
         camera.y = player.y;
@@ -142,8 +167,174 @@ window.onload = function () {
         player.dashCharges = player.maxDashCharges;
         player.dashRequested = false;
         player.trail = [];
+        player.renderScaleX = 1;
+        player.renderScaleY = 1;
+        player.stretchVel = 0;
+        player.lastTeleportAt = 0;
         camera.x = player.x;
         camera.y = player.y;
+
+        // Reset enemies to their original spawn state.
+        enemies = (typeof window.createEnemies === "function")
+          ? window.createEnemies({ ...level, platforms })
+          : [];
+        teleporters = (level.teleporters || []).map((teleporter) => ({
+            ...teleporter,
+            cooldownUntil: 0
+        }));
+        portalParticles = [];
+        environmentParticles = [];
+    }
+
+    function clamp(value, min, max) {
+        return Math.max(min, Math.min(max, value));
+    }
+
+    function lerp(a, b, t) {
+        return a + (b - a) * t;
+    }
+
+    function triggerSquashStretch(type) {
+        if (type === "jump") {
+            player.renderScaleX = 0.88;
+            player.renderScaleY = 1.16;
+            player.stretchVel = 0.18;
+        } else if (type === "land") {
+            player.renderScaleX = 1.16;
+            player.renderScaleY = 0.84;
+            player.stretchVel = 0.24;
+            player.justLandedAt = Date.now();
+        } else if (type === "dash") {
+            player.renderScaleX = 1.22;
+            player.renderScaleY = 0.82;
+            player.stretchVel = 0.16;
+        }
+    }
+
+    function emitPebbles(platform, intensity) {
+        if (!platform.reactivePebbles) return;
+        const count = Math.max(2, Math.floor((platform.pebbleCount || 3) * intensity));
+        for (let i = 0; i < count; i++) {
+            environmentParticles.push({
+                kind: "pebble",
+                x: platform.x + 10 + Math.random() * Math.max(20, platform.w - 20),
+                y: platform.y - 4,
+                vx: (Math.random() - 0.5) * 2.2,
+                vy: -Math.random() * 2.5,
+                life: 450 + Math.random() * 250,
+                bornAt: Date.now(),
+                size: 3 + Math.random() * 3
+            });
+        }
+    }
+
+    function triggerReactivePlatform(platform, mode) {
+        if (!platform) return;
+        platform.lastReactiveAt = Date.now();
+        platform.reactiveMode = mode;
+        if (mode === "land") emitPebbles(platform, 1);
+        if (mode === "dash") emitPebbles(platform, 1.4);
+    }
+
+    function updateVisualEffects(now, dt) {
+        player.renderScaleX = lerp(player.renderScaleX, 1, Math.min(1, dt * 12 + player.stretchVel));
+        player.renderScaleY = lerp(player.renderScaleY, 1, Math.min(1, dt * 12 + player.stretchVel));
+        player.stretchVel = Math.max(0, player.stretchVel - dt * 0.9);
+
+        portalParticles = portalParticles.filter((particle) => now - particle.bornAt < particle.life);
+        environmentParticles = environmentParticles.filter((particle) => now - particle.bornAt < particle.life);
+
+        for (const particle of portalParticles) {
+            particle.x += particle.vx * dt * 60;
+            particle.y += particle.vy * dt * 60;
+        }
+
+        for (const particle of environmentParticles) {
+            particle.x += particle.vx * dt * 60;
+            particle.y += particle.vy * dt * 60;
+            particle.vy += 0.12;
+        }
+
+        for (const teleporter of teleporters) {
+            if (Math.random() < 0.16) {
+                for (const endpoint of [teleporter.entry, teleporter.exit]) {
+                    portalParticles.push({
+                        kind: "portal",
+                        x: endpoint.x,
+                        y: endpoint.y,
+                        vx: (Math.random() - 0.5) * 0.9,
+                        vy: -0.3 - Math.random() * 0.8,
+                        life: 450 + Math.random() * 300,
+                        bornAt: now,
+                        alpha: 0.4 + Math.random() * 0.4,
+                        color: teleporter.color
+                    });
+                }
+            }
+        }
+    }
+
+    function handleTeleporters(now) {
+        if (now - player.lastTeleportAt < 180) return;
+
+        const playerCx = player.x + player.w * 0.5;
+        const playerCy = player.y + player.h * 0.5;
+        for (const teleporter of teleporters) {
+            if (teleporter.cooldownUntil > now) continue;
+            const dx = playerCx - teleporter.entry.x;
+            const dy = playerCy - teleporter.entry.y;
+            const radius = teleporter.entry.r + Math.max(player.w, player.h) * 0.3;
+            if ((dx * dx + dy * dy) > radius * radius) continue;
+
+            player.x = teleporter.exit.x - player.w * 0.5;
+            player.y = teleporter.exit.y - player.h * 0.5;
+            player.lastTeleportAt = now;
+            teleporter.cooldownUntil = now + 500;
+
+            for (let i = 0; i < 18; i++) {
+                portalParticles.push({
+                    kind: "portalBurst",
+                    x: teleporter.exit.x,
+                    y: teleporter.exit.y,
+                    vx: (Math.random() - 0.5) * 3.8,
+                    vy: (Math.random() - 0.5) * 3.8,
+                    life: 380 + Math.random() * 220,
+                    bornAt: now,
+                    alpha: 0.7,
+                    color: teleporter.color
+                });
+            }
+            break;
+        }
+    }
+
+    function updateCamera(dt) {
+        const anchors = level?.anchors || [];
+        let roomCenterX = player.x + player.w * 0.5;
+        let roomCenterY = player.y + player.h * 0.5;
+        let lockX = false;
+
+        for (let i = 0; i < anchors.length - 1; i++) {
+            const left = anchors[i];
+            const right = anchors[i + 1];
+            if (player.x + player.w * 0.5 < left.x) continue;
+            if (player.x + player.w * 0.5 > right.x + right.w) continue;
+            roomCenterX = (left.x + right.x + right.w) * 0.5;
+            roomCenterY = (left.y + right.y) * 0.5;
+            lockX = Math.abs(right.y - left.y) > 170;
+            break;
+        }
+
+        const lookAhead = player.facing * (90 + Math.min(70, Math.abs(player.vx) * 10));
+        const targetCamX = (lockX ? roomCenterX : player.x + player.w * 0.5 + lookAhead) - canvas.width / 2;
+        const targetCamY = roomCenterY - Math.max(0, canvas.height / 2 - 120);
+        const lerpFactor = player.state === "dash" ? 9.5 : 4.5;
+
+        camera.x += (targetCamX - camera.x) * dt * lerpFactor;
+        camera.y += (targetCamY - camera.y) * dt * 3.8;
+
+        camera.x = clamp(camera.x, 0, Math.max(0, world.width - canvas.width));
+        camera.y = clamp(camera.y, 0, Math.max(0, world.height - canvas.height));
     }
 
     function triggerCrumble(platform) {
@@ -227,8 +418,10 @@ window.onload = function () {
             const len = Math.sqrt(dx * dx + dy * dy);
             player.dashDirX = dx / len;
             player.dashDirY = dy / len;
+            player.facing = player.dashDirX !== 0 ? Math.sign(player.dashDirX) : player.facing;
 
             player.lastDashTime = Date.now();
+            triggerSquashStretch("dash");
         }
 
         if (newState === "grounded") {
@@ -250,6 +443,11 @@ window.onload = function () {
         const now = Date.now();
 
         updateCrumblePlatforms(now);
+        updateVisualEffects(now, dt);
+
+        if (typeof window.updateEnemies === "function") {
+            window.updateEnemies(enemies, player, platforms, dt, now);
+        }
 
         // ===== POWER-UP MANAGEMENT =====
         for (let type in player.powerUps) {
@@ -332,6 +530,13 @@ window.onload = function () {
             return; // Halt update frame
         }
 
+        if (typeof window.checkEnemyCollisions === "function") {
+            if (window.checkEnemyCollisions(enemies, player, now)) {
+                die();
+                return;
+            }
+        }
+
         // ===== DASH STATE =====
         if (player.state === "dash") {
             player.dashTime += dt * 1000;
@@ -375,6 +580,7 @@ window.onload = function () {
                         player.onGround = true;
                         player.lastGrounded = Date.now();
                         triggerCrumble(p);
+                        triggerReactivePlatform(p, "dash");
                     } else if (player.vy < 0) {
                         player.y = p.y + p.h;
                     }
@@ -389,6 +595,8 @@ window.onload = function () {
                 if (player.vy < -7) player.vy = -7;
                 if (Math.abs(player.vx) > player.maxSpeed) player.vx = Math.sign(player.vx) * player.maxSpeed;
             }
+
+            handleTeleporters(now);
 
             return;
         }
@@ -413,6 +621,7 @@ window.onload = function () {
         if (!player.onGround && inputX === 0) player.vx *= 0.992;
 
         player.vx = Math.max(-player.maxSpeed, Math.min(player.maxSpeed, player.vx));
+        if (inputX !== 0) player.facing = inputX;
 
         // ===== JUMP =====
         const jumpPressedRecently =
@@ -429,6 +638,7 @@ window.onload = function () {
             player.lastJumpTime = now;
             player.lastJumpPress = 0;
             setState("air");
+            triggerSquashStretch("jump");
         }
 
         // ===== GRAVITY =====
@@ -476,6 +686,8 @@ window.onload = function () {
                         setState("air");
                     } else {
                         triggerCrumble(p);
+                        triggerReactivePlatform(p, "land");
+                        if (now - player.justLandedAt > 120) triggerSquashStretch("land");
                         setState("grounded");
                     }
                 } else if (player.vy < 0) {
@@ -534,16 +746,22 @@ window.onload = function () {
             }
         }
 
-        // ===== CAMERA SMOOTHING =====
-        const targetCamX = player.x + player.w / 2 - canvas.width / 2;
-        const targetCamY = player.y + player.h / 2 - Math.max(0, canvas.height / 2 - 150); // slight offset to see below
-        
-        const lerpFactor = player.state === "dash" ? 12.0 : 6.0; // Snap faster during dashes
-        camera.x += (targetCamX - camera.x) * dt * lerpFactor;
-        camera.y += (targetCamY - camera.y) * dt * lerpFactor;
+        handleTeleporters(now);
 
-        camera.x = Math.max(0, Math.min(world.width - canvas.width, camera.x));
-        camera.y = Math.max(0, Math.min(world.height - canvas.height, camera.y));
+        for (let p of platforms) {
+            if (p.type !== "exit") continue;
+            if (
+                player.x < p.x + p.w &&
+                player.x + player.w > p.x &&
+                player.y < p.y + p.h &&
+                player.y + player.h > p.y
+            ) {
+                initLevel();
+                return;
+            }
+        }
+
+        updateCamera(dt);
     }
 
     function draw() {
@@ -602,6 +820,46 @@ window.onload = function () {
             }
 
             ctx.fillRect(drawX, drawY, p.w, p.h);
+
+            if (p.lightGuidance) {
+                const lightX = drawX + p.w * 0.5;
+                const lightY = drawY - 22;
+                const glow = 16 + Math.sin(Date.now() / 180 + p.id) * 3;
+                const gradient = ctx.createRadialGradient(lightX, lightY, 1, lightX, lightY, glow);
+                gradient.addColorStop(0, "rgba(255, 240, 180, 0.95)");
+                gradient.addColorStop(1, "rgba(255, 210, 110, 0)");
+                ctx.fillStyle = gradient;
+                ctx.beginPath();
+                ctx.arc(lightX, lightY, glow, 0, Math.PI * 2);
+                ctx.fill();
+
+                ctx.fillStyle = p.lightGuidance === "torch" ? "#7A4A21" : "#7AD97A";
+                ctx.fillRect(lightX - 3, drawY - 18, 6, 18);
+            }
+
+            if (p.reactiveGrass) {
+                const sway = Math.sin(Date.now() / 220 + p.id) * 1.8;
+                const impact = p.lastReactiveAt ? Math.max(0, 1 - (Date.now() - p.lastReactiveAt) / 260) : 0;
+                const tuftCount = p.grassTufts || 4;
+                ctx.strokeStyle = "#6DCB5D";
+                for (let i = 0; i < tuftCount; i++) {
+                    const tuftX = drawX + 10 + (i * (p.w - 20)) / Math.max(1, tuftCount - 1);
+                    const bend = sway + (p.reactiveMode === "dash" ? 8 : 4) * impact;
+                    ctx.beginPath();
+                    ctx.moveTo(tuftX, drawY);
+                    ctx.lineTo(tuftX + bend, drawY - 10 - impact * 4);
+                    ctx.stroke();
+                }
+            }
+
+            if (p.reactivePebbles) {
+                ctx.fillStyle = "#84735E";
+                const pebbleCount = p.pebbleCount || 3;
+                for (let i = 0; i < pebbleCount; i++) {
+                    const pebbleX = drawX + 12 + (i * (p.w - 24)) / Math.max(1, pebbleCount - 1);
+                    ctx.fillRect(pebbleX, drawY - 3, 4, 3);
+                }
+            }
 
             // Sawblade Hazard Execution
             if (p.hasSawblade) {
@@ -689,6 +947,54 @@ window.onload = function () {
             }
         }
 
+        if (typeof window.drawEnemies === "function") {
+            window.drawEnemies(ctx, enemies, camera, Date.now());
+        }
+
+        for (const teleporter of teleporters) {
+            for (const endpoint of [teleporter.entry, teleporter.exit]) {
+                const px = endpoint.x - camera.x;
+                const py = endpoint.y - camera.y;
+                const radius = endpoint.r + Math.sin(Date.now() / 120) * 2;
+                const gradient = ctx.createRadialGradient(px, py, 3, px, py, radius + 10);
+                gradient.addColorStop(0, "rgba(255,255,255,0.95)");
+                gradient.addColorStop(0.4, `${teleporter.color}CC`);
+                gradient.addColorStop(1, "rgba(120,180,255,0)");
+                ctx.fillStyle = gradient;
+                ctx.beginPath();
+                ctx.arc(px, py, radius + 10, 0, Math.PI * 2);
+                ctx.fill();
+
+                ctx.strokeStyle = teleporter.color;
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+                ctx.arc(px, py, radius, 0, Math.PI * 2);
+                ctx.stroke();
+            }
+        }
+
+        for (const particle of portalParticles) {
+            const age = (Date.now() - particle.bornAt) / particle.life;
+            const alpha = (particle.alpha || 0.45) * (1 - age);
+            if (alpha <= 0) continue;
+            ctx.globalAlpha = alpha;
+            ctx.fillStyle = particle.color || "#8BD3FF";
+            ctx.beginPath();
+            ctx.arc(particle.x - camera.x, particle.y - camera.y, particle.kind === "portalBurst" ? 3.5 : 2.5, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.globalAlpha = 1;
+        }
+
+        for (const particle of environmentParticles) {
+            const age = (Date.now() - particle.bornAt) / particle.life;
+            const alpha = 1 - age;
+            if (alpha <= 0) continue;
+            ctx.globalAlpha = alpha;
+            ctx.fillStyle = "#9A8568";
+            ctx.fillRect(particle.x - camera.x, particle.y - camera.y, particle.size, particle.size);
+            ctx.globalAlpha = 1;
+        }
+
         // Draw Ghost Trails
         player.trail.forEach(t => {
             let age = Date.now() - t.time;
@@ -699,31 +1005,36 @@ window.onload = function () {
             }
         });
 
-        // Draw Player (strict square without deformations)
+        // Draw Player
         ctx.fillStyle = player.state === "dash" ? "cyan" : "blue";
         if (player.powerUps['giantBox']) ctx.fillStyle = "red";
         
         let screenX = player.x - camera.x;
         let screenY = player.y - camera.y;
 
+        ctx.save();
+        ctx.translate(screenX + player.w / 2, screenY + player.h / 2);
+        ctx.scale(player.renderScaleX, player.renderScaleY);
+
         if (player.state === "dash") {
-            ctx.fillRect(screenX, screenY, player.w, player.h);
+            ctx.fillRect(-player.w / 2, -player.h / 2, player.w, player.h);
             
             // Add a burst impact flash at the very front edge
             ctx.fillStyle = "white";
             ctx.globalAlpha = Math.random() * 0.5 + 0.3;
             ctx.beginPath();
             ctx.arc(
-                screenX + (player.dashDirX >= 0 ? player.w : 0),
-                screenY + (player.dashDirY >= 0 ? player.h : player.h / 2),
+                player.dashDirX >= 0 ? player.w / 2 : -player.w / 2,
+                player.dashDirY >= 0 ? player.h / 2 : 0,
                 Math.random() * 15 + 10,
                 0, Math.PI * 2
             );
             ctx.fill();
             ctx.globalAlpha = 1.0;
         } else {
-            ctx.fillRect(screenX, screenY, player.w, player.h);
+            ctx.fillRect(-player.w / 2, -player.h / 2, player.w, player.h);
         }
+        ctx.restore();
 
         const powerUpKeys = Object.keys(player.powerUps);
         ctx.fillStyle = "rgba(0, 0, 0, 0.55)";
